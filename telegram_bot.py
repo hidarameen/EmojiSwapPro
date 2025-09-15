@@ -63,6 +63,9 @@ class TelegramEmojiBot:
         self.emoji_mappings: Dict[str, int] = {}
         self.monitored_channels: Dict[int, Dict[str, str]] = {}
         
+        # Cache for admin list
+        self.admin_ids: set = {6602517122}  # Default admin
+        
         # Arabic command mappings
         self.arabic_commands = {
             'إضافة_استبدال': 'add_emoji_replacement',
@@ -73,6 +76,9 @@ class TelegramEmojiBot:
             'عرض_القنوات': 'list_channels',
             'حذف_قناة': 'remove_channel',
             'معرف_ايموجي': 'get_emoji_id',
+            'اضافة_ادمن': 'add_admin',
+            'عرض_الادمن': 'list_admins',
+            'حذف_ادمن': 'remove_admin',
             'مساعدة': 'help_command'
         }
 
@@ -85,6 +91,7 @@ class TelegramEmojiBot:
             # Load cached data
             await self.load_emoji_mappings()
             await self.load_monitored_channels()
+            await self.load_admin_ids()
             
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
@@ -123,6 +130,92 @@ class TelegramEmojiBot:
                 logger.info(f"Loaded {len(self.monitored_channels)} monitored channels from database")
         except Exception as e:
             logger.error(f"Failed to load monitored channels: {e}")
+
+    async def load_admin_ids(self):
+        """Load admin IDs from database into cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Create admins table if it doesn't exist
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_admins (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT UNIQUE NOT NULL,
+                        username TEXT,
+                        added_by BIGINT,
+                        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        is_active BOOLEAN DEFAULT TRUE
+                    )
+                """)
+                
+                # Add default admin if not exists
+                await conn.execute("""
+                    INSERT INTO bot_admins (user_id, username, added_by, is_active) 
+                    VALUES ($1, 'Default Admin', $1, TRUE) 
+                    ON CONFLICT (user_id) DO NOTHING
+                """, 6602517122)
+                
+                # Load active admins
+                rows = await conn.fetch("SELECT user_id FROM bot_admins WHERE is_active = TRUE")
+                self.admin_ids = {row['user_id'] for row in rows}
+                logger.info(f"Loaded {len(self.admin_ids)} admin IDs from database")
+        except Exception as e:
+            logger.error(f"Failed to load admin IDs: {e}")
+
+    async def add_admin(self, user_id: int, username: str = None, added_by: int = None) -> bool:
+        """Add admin to database and cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return False
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO bot_admins (user_id, username, added_by, is_active) 
+                       VALUES ($1, $2, $3, TRUE) 
+                       ON CONFLICT (user_id) 
+                       DO UPDATE SET username = $2, added_by = $3, is_active = TRUE""",
+                    user_id, username, added_by
+                )
+                
+                # Update cache
+                self.admin_ids.add(user_id)
+                logger.info(f"Added admin: {user_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to add admin: {e}")
+            return False
+
+    async def remove_admin(self, user_id: int) -> bool:
+        """Remove admin from database and cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return False
+            
+        # Prevent removing the default admin
+        if user_id == 6602517122:
+            return False
+            
+        try:
+            async with self.db_pool.acquire() as conn:
+                result = await conn.execute(
+                    "UPDATE bot_admins SET is_active = FALSE WHERE user_id = $1",
+                    user_id
+                )
+                
+                if result == 'UPDATE 1':
+                    # Update cache
+                    self.admin_ids.discard(user_id)
+                    logger.info(f"Removed admin: {user_id}")
+                    return True
+                else:
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Failed to remove admin: {e}")
+            return False
 
     async def add_emoji_replacement(self, normal_emoji: str, premium_emoji_id: int, description: Optional[str] = None) -> bool:
         """Add or update emoji replacement in database and cache"""
@@ -328,11 +421,9 @@ class TelegramEmojiBot:
             sender_id = event.sender_id
             logger.info(f"Handling private message: '{message_text}' from {chat_id}, sender: {sender_id}")
             
-            # Check if sender is admin
-            admin_id = 6602517122
-            if sender_id != admin_id:
-                logger.info(f"Unauthorized access attempt from user {sender_id}")
-                await event.reply("❌ غير مصرح لك باستخدام هذا البوت.")
+            # Check if sender is admin - silently ignore if not
+            if sender_id not in self.admin_ids:
+                logger.info(f"Unauthorized access attempt from user {sender_id} - ignoring silently")
                 return
             
             # Parse command and arguments
@@ -715,6 +806,105 @@ class TelegramEmojiBot:
             logger.error(f"Failed to remove channel: {e}")
             await event.reply("حدث خطأ أثناء حذف القناة")
 
+    async def cmd_add_admin(self, event, args: str):
+        """Handle add admin command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: اضافة_ادمن <معرف_المستخدم> [اسم_المستخدم]")
+                return
+            
+            parts = args.strip().split(None, 1)
+            try:
+                user_id = int(parts[0])
+            except ValueError:
+                await event.reply("معرف المستخدم يجب أن يكون رقماً")
+                return
+                
+            username = parts[1] if len(parts) > 1 else None
+            
+            if user_id in self.admin_ids:
+                await event.reply("هذا المستخدم أدمن بالفعل")
+                return
+            
+            success = await self.add_admin(user_id, username, event.sender_id)
+            
+            if success:
+                await event.reply(f"✅ تم إضافة الأدمن بنجاح: {user_id}")
+            else:
+                await event.reply("❌ فشل في إضافة الأدمن")
+                
+        except Exception as e:
+            logger.error(f"Failed to add admin: {e}")
+            await event.reply("حدث خطأ أثناء إضافة الأدمن")
+
+    async def cmd_list_admins(self, event, args: str):
+        """Handle list admins command"""
+        try:
+            if not self.admin_ids:
+                await event.reply("لا توجد أدمن محفوظين")
+                return
+            
+            if self.db_pool is None:
+                await event.reply("❌ قاعدة البيانات غير متاحة")
+                return
+                
+            async with self.db_pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT user_id, username, added_by, added_at 
+                    FROM bot_admins 
+                    WHERE is_active = TRUE 
+                    ORDER BY added_at
+                """)
+                
+                response = "👥 قائمة الأدمن:\n\n"
+                for row in rows:
+                    username_display = row['username'] or 'غير معروف'
+                    added_by_display = row['added_by'] or 'النظام'
+                    added_date = row['added_at'].strftime('%Y-%m-%d') if row['added_at'] else 'غير معروف'
+                    
+                    response += f"• معرف: {row['user_id']}\n"
+                    response += f"  الاسم: {username_display}\n"
+                    response += f"  أضيف بواسطة: {added_by_display}\n"
+                    response += f"  التاريخ: {added_date}\n\n"
+                
+                await event.reply(response)
+                
+        except Exception as e:
+            logger.error(f"Failed to list admins: {e}")
+            await event.reply("حدث خطأ أثناء عرض قائمة الأدمن")
+
+    async def cmd_remove_admin(self, event, args: str):
+        """Handle remove admin command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: حذف_ادمن <معرف_المستخدم>")
+                return
+            
+            try:
+                user_id = int(args.strip())
+            except ValueError:
+                await event.reply("معرف المستخدم يجب أن يكون رقماً")
+                return
+            
+            if user_id == 6602517122:
+                await event.reply("❌ لا يمكن حذف الأدمن الرئيسي")
+                return
+                
+            if user_id not in self.admin_ids:
+                await event.reply("هذا المستخدم ليس أدمن")
+                return
+            
+            success = await self.remove_admin(user_id)
+            
+            if success:
+                await event.reply(f"✅ تم حذف الأدمن بنجاح: {user_id}")
+            else:
+                await event.reply("❌ فشل في حذف الأدمن")
+                
+        except Exception as e:
+            logger.error(f"Failed to remove admin: {e}")
+            await event.reply("حدث خطأ أثناء حذف الأدمن")
+
     async def cmd_help_command(self, event, args: str):
         """Handle help command"""
         help_text = """
@@ -730,6 +920,11 @@ class TelegramEmojiBot:
 • إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة
 • عرض_القنوات - عرض القنوات المراقبة
 • حذف_قناة <معرف_القناة> - حذف قناة من المراقبة
+
+👥 إدارة الأدمن:
+• اضافة_ادمن <معرف_المستخدم> [اسم_المستخدم] - إضافة أدمن جديد
+• عرض_الادمن - عرض قائمة الأدمن
+• حذف_ادمن <معرف_المستخدم> - حذف أدمن
 
 🔍 أدوات مساعدة:
 • معرف_ايموجي <إيموجي_مميز> - عرض معرف الإيموجي المميز
