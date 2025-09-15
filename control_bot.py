@@ -103,13 +103,23 @@ class TelegramControlBot:
                     )
                 """)
                 
-                # Add new columns if they don't exist
-                await conn.execute("""
-                    ALTER TABLE command_queue 
-                    ADD COLUMN IF NOT EXISTS chat_id BIGINT,
-                    ADD COLUMN IF NOT EXISTS message_id INTEGER,
-                    ADD COLUMN IF NOT EXISTS callback_data TEXT
-                """)
+                # Add new columns if they don't exist (for existing databases)
+                try:
+                    await conn.execute("""
+                        ALTER TABLE command_queue 
+                        ADD COLUMN IF NOT EXISTS chat_id BIGINT
+                    """)
+                    await conn.execute("""
+                        ALTER TABLE command_queue 
+                        ADD COLUMN IF NOT EXISTS message_id INTEGER
+                    """)
+                    await conn.execute("""
+                        ALTER TABLE command_queue 
+                        ADD COLUMN IF NOT EXISTS callback_data TEXT
+                    """)
+                except Exception as alter_error:
+                    # Ignore errors if columns already exist
+                    logger.debug(f"ALTER TABLE warnings (expected): {alter_error}")
                 
                 logger.info("Command queue table created/updated successfully")
                 

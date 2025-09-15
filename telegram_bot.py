@@ -126,6 +126,9 @@ class TelegramEmojiBot:
             self.db_pool = await asyncpg.create_pool(self.database_url, min_size=1, max_size=10)
             logger.info("Database connection pool initialized successfully")
             
+            # Create all required tables
+            await self.create_database_tables()
+            
             # Load cached data
             await self.load_emoji_mappings()
             await self.load_channel_emoji_mappings()
@@ -135,6 +138,99 @@ class TelegramEmojiBot:
             
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
+            raise
+
+    async def create_database_tables(self):
+        """Create all required database tables"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Command queue table
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS command_queue (
+                        id SERIAL PRIMARY KEY,
+                        command TEXT NOT NULL,
+                        args TEXT,
+                        requested_by BIGINT NOT NULL,
+                        chat_id BIGINT,
+                        message_id INTEGER,
+                        callback_data TEXT,
+                        status TEXT DEFAULT 'pending',
+                        result TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        processed_at TIMESTAMP
+                    )
+                """)
+                
+                # Emoji replacements table
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS emoji_replacements (
+                        id SERIAL PRIMARY KEY,
+                        normal_emoji TEXT UNIQUE NOT NULL,
+                        premium_emoji_id BIGINT NOT NULL,
+                        description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Monitored channels table
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS monitored_channels (
+                        id SERIAL PRIMARY KEY,
+                        channel_id BIGINT UNIQUE NOT NULL,
+                        channel_username TEXT,
+                        channel_title TEXT,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        replacement_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Channel emoji replacements table
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS channel_emoji_replacements (
+                        id SERIAL PRIMARY KEY,
+                        channel_id BIGINT NOT NULL,
+                        normal_emoji TEXT NOT NULL,
+                        premium_emoji_id BIGINT NOT NULL,
+                        description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(channel_id, normal_emoji)
+                    )
+                """)
+                
+                # Forwarding tasks table
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS forwarding_tasks (
+                        id SERIAL PRIMARY KEY,
+                        source_channel_id BIGINT NOT NULL,
+                        target_channel_id BIGINT NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        description TEXT,
+                        delay_seconds INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(source_channel_id, target_channel_id)
+                    )
+                """)
+                
+                # Bot admins table
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_admins (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT UNIQUE NOT NULL,
+                        username TEXT,
+                        added_by BIGINT,
+                        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        is_active BOOLEAN DEFAULT TRUE
+                    )
+                """)
+                
+                logger.info("All database tables created successfully")
+                
+        except Exception as e:
+            logger.error(f"Failed to create database tables: {e}")
             raise
 
     async def load_emoji_mappings(self):
