@@ -86,6 +86,7 @@ class TelegramEmojiBot:
             'تعطيل_مهمة_توجيه': 'deactivate_forwarding_task',
             'تفعيل_مهمة_توجيه': 'activate_forwarding_task',
             'حذف_مهمة_توجيه': 'delete_forwarding_task',
+            'تعديل_تأخير_مهمة': 'update_forwarding_delay',
             'إضافة_مهمة_توجيه': 'add_forwarding_task',
             'عرض_مهام_التوجيه': 'list_forwarding_tasks',
             'إضافة_استبدال': 'add_emoji_replacement',
@@ -215,13 +216,20 @@ class TelegramEmojiBot:
                         target_channel_id BIGINT NOT NULL,
                         is_active BOOLEAN DEFAULT TRUE,
                         description TEXT,
+                        delay_seconds INTEGER DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(source_channel_id, target_channel_id)
                     )
                 """)
                 
+                # Add delay_seconds column if it doesn't exist
+                await conn.execute("""
+                    ALTER TABLE forwarding_tasks 
+                    ADD COLUMN IF NOT EXISTS delay_seconds INTEGER DEFAULT 0
+                """)
+                
                 rows = await conn.fetch(
-                    "SELECT id, source_channel_id, target_channel_id, is_active, description FROM forwarding_tasks WHERE is_active = TRUE"
+                    "SELECT id, source_channel_id, target_channel_id, is_active, description, delay_seconds FROM forwarding_tasks WHERE is_active = TRUE"
                 )
                 
                 self.forwarding_tasks = {}
@@ -231,7 +239,8 @@ class TelegramEmojiBot:
                         'source': row['source_channel_id'],
                         'target': row['target_channel_id'],
                         'active': row['is_active'],
-                        'description': row['description'] or ''
+                        'description': row['description'] or '',
+                        'delay': row['delay_seconds'] or 0
                     }
                 
                 logger.info(f"Loaded {len(self.forwarding_tasks)} active forwarding tasks")
@@ -239,7 +248,7 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to load forwarding tasks: {e}")
 
-    async def add_forwarding_task(self, source_channel_id: int, target_channel_id: int, description: Optional[str] = None) -> bool:
+    async def add_forwarding_task(self, source_channel_id: int, target_channel_id: int, description: Optional[str] = None, delay_seconds: int = 0) -> bool:
         """Add forwarding task to database and cache"""
         if self.db_pool is None:
             logger.error("Database pool not initialized")
@@ -248,12 +257,12 @@ class TelegramEmojiBot:
             async with self.db_pool.acquire() as conn:
                 # Insert new forwarding task
                 task_id = await conn.fetchval(
-                    """INSERT INTO forwarding_tasks (source_channel_id, target_channel_id, description, is_active) 
-                       VALUES ($1, $2, $3, TRUE) 
+                    """INSERT INTO forwarding_tasks (source_channel_id, target_channel_id, description, delay_seconds, is_active) 
+                       VALUES ($1, $2, $3, $4, TRUE) 
                        ON CONFLICT (source_channel_id, target_channel_id) 
-                       DO UPDATE SET is_active = TRUE, description = $3
+                       DO UPDATE SET is_active = TRUE, description = $3, delay_seconds = $4
                        RETURNING id""",
-                    source_channel_id, target_channel_id, description
+                    source_channel_id, target_channel_id, description, delay_seconds
                 )
                 
                 # Update cache
@@ -261,10 +270,11 @@ class TelegramEmojiBot:
                     'source': source_channel_id,
                     'target': target_channel_id,
                     'active': True,
-                    'description': description or ''
+                    'description': description or '',
+                    'delay': delay_seconds
                 }
                 
-                logger.info(f"Added forwarding task: {source_channel_id} -> {target_channel_id}")
+                logger.info(f"Added forwarding task: {source_channel_id} -> {target_channel_id} (delay: {delay_seconds}s)")
                 return True
                 
         except Exception as e:
@@ -369,38 +379,60 @@ class TelegramEmojiBot:
             # Copy to each target
             for task in active_tasks:
                 target_channel_id = task['target']
+                delay_seconds = task.get('delay', 0)
                 
-                try:
-                    # Copy the message content instead of forwarding
-                    if message.text or message.message:
-                        # Text message
-                        text_content = message.text or message.message
-                        await self.client.send_message(
-                            entity=target_channel_id,
-                            message=text_content,
-                            formatting_entities=message.entities
-                        )
-                    elif message.media:
-                        # Media message (photo, video, document, etc.)
-                        caption = message.text or message.message or ""
-                        await self.client.send_file(
-                            entity=target_channel_id,
-                            file=message.media,
-                            caption=caption,
-                            formatting_entities=message.entities
-                        )
-                    else:
-                        # Other types of messages
-                        logger.warning(f"Unsupported message type for copying from {source_channel_id}")
-                        continue
-                    
-                    logger.info(f"Copied message from {source_channel_id} to {target_channel_id}")
-                    
-                except Exception as copy_error:
-                    logger.error(f"Failed to copy message from {source_channel_id} to {target_channel_id}: {copy_error}")
+                # If there's a delay, schedule the copy operation
+                if delay_seconds > 0:
+                    logger.info(f"Scheduling delayed copy from {source_channel_id} to {target_channel_id} (delay: {delay_seconds}s)")
+                    asyncio.create_task(self._delayed_copy_message(
+                        source_channel_id, target_channel_id, message, delay_seconds
+                    ))
+                else:
+                    # Copy immediately
+                    await self._copy_message_to_target(source_channel_id, target_channel_id, message)
             
         except Exception as e:
             logger.error(f"Failed to process copying for channel {source_channel_id}: {e}")
+
+    async def _delayed_copy_message(self, source_channel_id: int, target_channel_id: int, message, delay_seconds: int):
+        """Copy message after delay"""
+        try:
+            await asyncio.sleep(delay_seconds)
+            await self._copy_message_to_target(source_channel_id, target_channel_id, message)
+            logger.info(f"Delayed copy completed from {source_channel_id} to {target_channel_id} after {delay_seconds}s")
+        except Exception as e:
+            logger.error(f"Failed to perform delayed copy from {source_channel_id} to {target_channel_id}: {e}")
+
+    async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
+        """Copy message content to target channel"""
+        try:
+            # Copy the message content instead of forwarding
+            if message.text or message.message:
+                # Text message
+                text_content = message.text or message.message
+                await self.client.send_message(
+                    entity=target_channel_id,
+                    message=text_content,
+                    formatting_entities=message.entities
+                )
+            elif message.media:
+                # Media message (photo, video, document, etc.)
+                caption = message.text or message.message or ""
+                await self.client.send_file(
+                    entity=target_channel_id,
+                    file=message.media,
+                    caption=caption,
+                    formatting_entities=message.entities
+                )
+            else:
+                # Other types of messages
+                logger.warning(f"Unsupported message type for copying from {source_channel_id}")
+                return
+            
+            logger.info(f"Copied message from {source_channel_id} to {target_channel_id}")
+            
+        except Exception as copy_error:
+            logger.error(f"Failed to copy message from {source_channel_id} to {target_channel_id}: {copy_error}")
 
     async def load_admin_ids(self):
         """Load admin IDs from database into cache"""
@@ -2420,12 +2452,12 @@ class TelegramEmojiBot:
         """Handle add forwarding task command"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: إضافة_مهمة_توجيه <معرف_القناة_المصدر> <معرف_القناة_الهدف> [وصف]")
+                await event.reply("الاستخدام: إضافة_مهمة_توجيه <معرف_القناة_المصدر> <معرف_القناة_الهدف> [التأخير_بالثواني] [وصف]")
                 return
 
-            parts = args.strip().split(None, 2)
+            parts = args.strip().split(None, 3)
             if len(parts) < 2:
-                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_مهمة_توجيه <معرف_القناة_المصدر> <معرف_القناة_الهدف> [وصف]")
+                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_مهمة_توجيه <معرف_القناة_المصدر> <معرف_القناة_الهدف> [التأخير_بالثواني] [وصف]")
                 return
 
             try:
@@ -2435,7 +2467,28 @@ class TelegramEmojiBot:
                 await event.reply("❌ معرفات القنوات يجب أن تكون أرقاماً")
                 return
 
-            description = parts[2] if len(parts) > 2 else None
+            # Parse delay and description
+            delay_seconds = 0
+            description = None
+            
+            if len(parts) >= 3:
+                try:
+                    # Try to parse third parameter as delay
+                    delay_seconds = int(parts[2])
+                    if delay_seconds < 0:
+                        await event.reply("❌ التأخير يجب أن يكون رقماً موجباً أو صفر")
+                        return
+                    if delay_seconds > 3600:  # Max 1 hour
+                        await event.reply("❌ التأخير الأقصى هو 3600 ثانية (ساعة واحدة)")
+                        return
+                    
+                    # Description is the fourth parameter
+                    description = parts[3] if len(parts) > 3 else None
+                    
+                except ValueError:
+                    # Third parameter is not a number, treat it as description
+                    description = ' '.join(parts[2:])
+                    delay_seconds = 0
 
             # Check if both channels are monitored
             if source_channel_id not in self.monitored_channels:
@@ -2450,13 +2503,18 @@ class TelegramEmojiBot:
                 await event.reply("❌ لا يمكن توجيه الرسائل من القناة إلى نفسها")
                 return
 
-            success = await self.add_forwarding_task(source_channel_id, target_channel_id, description)
+            success = await self.add_forwarding_task(source_channel_id, target_channel_id, description, delay_seconds)
 
             source_name = self.monitored_channels[source_channel_id].get('title', 'Unknown')
             target_name = self.monitored_channels[target_channel_id].get('title', 'Unknown')
 
             if success:
-                await event.reply(f"✅ تم إضافة مهمة النسخ بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+                response = f"✅ تم إضافة مهمة النسخ بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}"
+                if delay_seconds > 0:
+                    response += f"\n⏱️ التأخير: {delay_seconds} ثانية"
+                else:
+                    response += f"\n⏱️ التأخير: فوري (بدون تأخير)"
+                await event.reply(response)
             else:
                 await event.reply("❌ فشل في إضافة مهمة النسخ")
 
@@ -2478,6 +2536,7 @@ class TelegramEmojiBot:
                 target_id = task_info['target']
                 is_active = task_info['active']
                 description = task_info['description']
+                delay = task_info.get('delay', 0)
 
                 source_name = self.monitored_channels.get(source_id, {}).get('title', f'القناة {source_id}')
                 target_name = self.monitored_channels.get(target_id, {}).get('title', f'القناة {target_id}')
@@ -2489,6 +2548,7 @@ class TelegramEmojiBot:
                 response += f"📤 من: {source_name} ({source_id})\n"
                 response += f"📥 إلى: {target_name} ({target_id})\n"
                 response += f"🔄 الحالة: {status_icon} {status_text}\n"
+                response += f"⏱️ التأخير: {delay} ثانية\n"
                 
                 if description:
                     response += f"📝 الوصف: {description}\n"
@@ -2611,6 +2671,78 @@ class TelegramEmojiBot:
             logger.error(f"Failed to deactivate forwarding task: {e}")
             await event.reply("حدث خطأ أثناء تعطيل مهمة التوجيه")
 
+    async def cmd_update_forwarding_delay(self, event, args: str):
+        """Handle update forwarding task delay command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: تعديل_تأخير_مهمة <معرف_المهمة> <التأخير_بالثواني>")
+                return
+
+            parts = args.strip().split()
+            if len(parts) != 2:
+                await event.reply("❌ تنسيق غير صحيح. استخدم: تعديل_تأخير_مهمة <معرف_المهمة> <التأخير_بالثواني>")
+                return
+
+            try:
+                task_id = int(parts[0])
+                delay_seconds = int(parts[1])
+            except ValueError:
+                await event.reply("❌ معرف المهمة والتأخير يجب أن يكونا أرقاماً")
+                return
+
+            if delay_seconds < 0:
+                await event.reply("❌ التأخير يجب أن يكون رقماً موجباً أو صفر")
+                return
+
+            if delay_seconds > 3600:  # Max 1 hour
+                await event.reply("❌ التأخير الأقصى هو 3600 ثانية (ساعة واحدة)")
+                return
+
+            # Check if task exists (including inactive ones)
+            if self.db_pool is None:
+                await event.reply("❌ قاعدة البيانات غير متاحة")
+                return
+
+            async with self.db_pool.acquire() as conn:
+                # Update delay in database
+                result = await conn.execute(
+                    "UPDATE forwarding_tasks SET delay_seconds = $1 WHERE id = $2",
+                    delay_seconds, task_id
+                )
+                
+                if result == 'UPDATE 1':
+                    # Update cache if task is active
+                    if task_id in self.forwarding_tasks:
+                        self.forwarding_tasks[task_id]['delay'] = delay_seconds
+                        
+                        task_info = self.forwarding_tasks[task_id]
+                        source_name = self.monitored_channels.get(task_info['source'], {}).get('title', 'Unknown')
+                        target_name = self.monitored_channels.get(task_info['target'], {}).get('title', 'Unknown')
+                    else:
+                        # Get task info from database
+                        task_row = await conn.fetchrow("SELECT source_channel_id, target_channel_id FROM forwarding_tasks WHERE id = $1", task_id)
+                        if task_row:
+                            source_name = self.monitored_channels.get(task_row['source_channel_id'], {}).get('title', 'Unknown')
+                            target_name = self.monitored_channels.get(task_row['target_channel_id'], {}).get('title', 'Unknown')
+                        else:
+                            source_name = "Unknown"
+                            target_name = "Unknown"
+                    
+                    if delay_seconds > 0:
+                        await event.reply(f"✅ تم تحديث تأخير المهمة {task_id} بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}\n⏱️ التأخير الجديد: {delay_seconds} ثانية")
+                    else:
+                        await event.reply(f"✅ تم تحديث تأخير المهمة {task_id} بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}\n⏱️ التأخير: فوري (بدون تأخير)")
+                    
+                    logger.info(f"Updated forwarding task {task_id} delay to {delay_seconds} seconds")
+                    return True
+                else:
+                    await event.reply("❌ المهمة غير موجودة")
+                    return False
+
+        except Exception as e:
+            logger.error(f"Failed to update forwarding task delay: {e}")
+            await event.reply("حدث خطأ أثناء تحديث تأخير مهمة التوجيه")
+
     async def cmd_help_command(self, event, args: str):
         """Handle help command"""
         help_text = """
@@ -2634,11 +2766,12 @@ class TelegramEmojiBot:
 • حالة_استبدال_قناة [معرف_القناة] - فحص حالة الاستبدال
 
 🔄 إدارة مهام النسخ:
-• إضافة_مهمة_توجيه <معرف_المصدر> <معرف_الهدف> [وصف] - إضافة مهمة نسخ جديدة
+• إضافة_مهمة_توجيه <معرف_المصدر> <معرف_الهدف> [التأخير_بالثواني] [وصف] - إضافة مهمة نسخ جديدة
 • عرض_مهام_التوجيه - عرض جميع مهام النسخ
 • حذف_مهمة_توجيه <معرف_المهمة> - حذف مهمة نسخ
 • تفعيل_مهمة_توجيه <معرف_المهمة> - تفعيل مهمة نسخ
 • تعطيل_مهمة_توجيه <معرف_المهمة> - تعطيل مهمة نسخ
+• تعديل_تأخير_مهمة <معرف_المهمة> <التأخير_بالثواني> - تعديل تأخير مهمة موجودة
 
 📺 إدارة القنوات:
 • إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة
