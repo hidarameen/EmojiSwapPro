@@ -614,12 +614,17 @@ class TelegramEmojiBot:
             await event.reply("حدث خطأ أثناء معالجة الأمر.")
 
     async def cmd_add_emoji_replacement(self, event, args: str):
-        """Handle add emoji replacement command - supports single or multiple replacements"""
+        """Handle add emoji replacement command - supports single or multiple replacements and reply messages"""
         try:
+            # Check if this is a reply to a message
+            reply_message = None
+            if event.message.is_reply:
+                reply_message = await event.message.get_reply_message()
+            
             # Check if args contain multiple lines (multiple replacements)
             lines = args.strip().split('\n')
             
-            if not args.strip():
+            if not args.strip() and not reply_message:
                 await event.reply("""
 📋 الاستخدام: إضافة_استبدال
 
@@ -635,10 +640,17 @@ class TelegramEmojiBot:
 ❤️,💖,💕 1234567890 وصف ثاني
 ✅ ✨ وصف ثالث
 
+🔸 الرد على رسالة:
+رد على رسالة تحتوي على إيموجيات عادية ومميزة بـ "إضافة_استبدال [وصف]"
+
 💡 يمكنك استخدام الإيموجي المميز مباشرة أو معرفه الرقمي
 💡 فصل الإيموجيات العادية بفاصلة (,) لربطها بنفس الإيموجي المميز
                 """.strip())
                 return
+            
+            # Handle reply message mode
+            if reply_message:
+                return await self._handle_reply_emoji_replacement(event, reply_message, args.strip())
             
             # Get all custom emojis from the message
             custom_emoji_ids = []
@@ -749,6 +761,79 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to add emoji replacement: {e}")
             await event.reply("حدث خطأ أثناء إضافة استبدال الإيموجي")
+
+    async def _handle_reply_emoji_replacement(self, event, reply_message, description: str):
+        """Handle emoji replacement when replying to a message"""
+        try:
+            # Extract emojis from reply message text
+            reply_text = reply_message.text or reply_message.message or ""
+            normal_emojis = self.extract_emojis_from_text(reply_text)
+            
+            # Get custom emojis from reply message
+            custom_emoji_ids = []
+            if reply_message.entities:
+                for entity in reply_message.entities:
+                    if isinstance(entity, MessageEntityCustomEmoji):
+                        custom_emoji_ids.append(entity.document_id)
+            
+            if not normal_emojis and not custom_emoji_ids:
+                await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجيات")
+                return
+            
+            if not custom_emoji_ids:
+                await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجيات مميزة")
+                return
+            
+            successful_replacements = []
+            failed_replacements = []
+            existing_emojis = []
+            
+            # Use the first premium emoji for all normal emojis
+            premium_emoji_id = custom_emoji_ids[0]
+            
+            if not normal_emojis:
+                await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجيات عادية")
+                return
+            
+            # Process each normal emoji
+            for normal_emoji in normal_emojis:
+                if normal_emoji in self.emoji_mappings:
+                    existing_emojis.append(normal_emoji)
+                    continue
+                
+                success = await self.add_emoji_replacement(normal_emoji, premium_emoji_id, description or f"من الرد على الرسالة")
+                
+                if success:
+                    successful_replacements.append(normal_emoji)
+                else:
+                    failed_replacements.append(normal_emoji)
+            
+            # Prepare response
+            response_parts = []
+            
+            if successful_replacements:
+                emoji_list = ", ".join(successful_replacements)
+                response_parts.append(f"✅ تم إضافة الاستبدالات التالية بنجاح:")
+                response_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+            
+            if existing_emojis:
+                if successful_replacements:
+                    response_parts.append("")
+                response_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
+            
+            if failed_replacements:
+                if successful_replacements or existing_emojis:
+                    response_parts.append("")
+                response_parts.append(f"❌ فشل في إضافة: {', '.join(failed_replacements)}")
+            
+            if not response_parts:
+                response_parts.append("❌ لم يتم إضافة أي استبدالات")
+            
+            await event.reply("\n".join(response_parts))
+            
+        except Exception as e:
+            logger.error(f"Failed to handle reply emoji replacement: {e}")
+            await event.reply("حدث خطأ أثناء معالجة الرد")
 
     async def cmd_list_emoji_replacements(self, event, args: str):
         """Handle list emoji replacements command"""
@@ -1100,7 +1185,12 @@ class TelegramEmojiBot:
     async def cmd_add_channel_emoji_replacement(self, event, args: str):
         """Handle add channel-specific emoji replacement command"""
         try:
-            if not args.strip():
+            # Check if this is a reply to a message
+            reply_message = None
+            if event.message.is_reply:
+                reply_message = await event.message.get_reply_message()
+            
+            if not args.strip() and not reply_message:
                 await event.reply("""
 📋 الاستخدام: إضافة_استبدال_قناة
 
@@ -1110,10 +1200,29 @@ class TelegramEmojiBot:
 🔸 عدة إيموجيات عادية لإيموجي مميز واحد:
 إضافة_استبدال_قناة <معرف_القناة> ✅,🟢,☑️ <إيموجي_مميز> [وصف]
 
+🔸 الرد على رسالة:
+رد على رسالة تحتوي على إيموجيات مع "إضافة_استبدال_قناة <معرف_القناة> [وصف]"
+
 💡 يمكنك استخدام الإيموجي المميز مباشرة أو معرفه الرقمي
 💡 فصل الإيموجيات العادية بفاصلة (,) لربطها بنفس الإيموجي المميز
                 """.strip())
                 return
+
+            # Handle reply message mode
+            if reply_message:
+                parts = args.strip().split(None, 1)
+                if len(parts) < 1:
+                    await event.reply("❌ استخدم: إضافة_استبدال_قناة <معرف_القناة> [وصف]")
+                    return
+                
+                try:
+                    channel_id = int(parts[0])
+                except ValueError:
+                    await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                    return
+                
+                description = parts[1] if len(parts) > 1 else None
+                return await self._handle_reply_channel_emoji_replacement(event, reply_message, channel_id, description)
 
             parts = args.strip().split(None, 3)
             if len(parts) < 3:
@@ -1202,6 +1311,87 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to add channel emoji replacement: {e}")
             await event.reply("حدث خطأ أثناء إضافة استبدال الإيموجي للقناة")
+
+    async def _handle_reply_channel_emoji_replacement(self, event, reply_message, channel_id: int, description: str):
+        """Handle channel emoji replacement when replying to a message"""
+        try:
+            # Check if channel is monitored
+            if channel_id not in self.monitored_channels:
+                await event.reply("❌ هذه القناة غير مراقبة. أضفها أولاً باستخدام أمر إضافة_قناة")
+                return
+            
+            # Extract emojis from reply message text
+            reply_text = reply_message.text or reply_message.message or ""
+            normal_emojis = self.extract_emojis_from_text(reply_text)
+            
+            # Get custom emojis from reply message
+            custom_emoji_ids = []
+            if reply_message.entities:
+                for entity in reply_message.entities:
+                    if isinstance(entity, MessageEntityCustomEmoji):
+                        custom_emoji_ids.append(entity.document_id)
+            
+            if not normal_emojis and not custom_emoji_ids:
+                await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجيات")
+                return
+            
+            if not custom_emoji_ids:
+                await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجيات مميزة")
+                return
+            
+            if not normal_emojis:
+                await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجيات عادية")
+                return
+            
+            # Use the first premium emoji for all normal emojis
+            premium_emoji_id = custom_emoji_ids[0]
+            
+            successful_count = 0
+            failed_emojis = []
+            existing_emojis = []
+            
+            # Process each normal emoji
+            for normal_emoji in normal_emojis:
+                # Check if already exists for this channel
+                if (channel_id in self.channel_emoji_mappings and 
+                    normal_emoji in self.channel_emoji_mappings[channel_id]):
+                    existing_emojis.append(normal_emoji)
+                    continue
+                
+                success = await self.add_channel_emoji_replacement(
+                    channel_id, normal_emoji, premium_emoji_id, 
+                    description or f"من الرد على الرسالة"
+                )
+                if success:
+                    successful_count += 1
+                else:
+                    failed_emojis.append(normal_emoji)
+            
+            # Prepare response
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', 'Unknown Channel')
+            
+            response_parts = []
+            if successful_count > 0:
+                successful_emojis = [e for e in normal_emojis if e not in existing_emojis and e not in failed_emojis]
+                emoji_list = ", ".join(successful_emojis[:successful_count])
+                response_parts.append(f"✅ تم إضافة {successful_count} استبدال للقناة {channel_name}:")
+                response_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+
+            if existing_emojis:
+                response_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
+
+            if failed_emojis:
+                response_parts.append(f"❌ فشل في إضافة: {', '.join(failed_emojis)}")
+
+            if not response_parts:
+                response_parts.append("❌ لم يتم إضافة أي استبدالات")
+
+            await event.reply("\n".join(response_parts))
+            
+        except Exception as e:
+            logger.error(f"Failed to handle reply channel emoji replacement: {e}")
+            await event.reply("حدث خطأ أثناء معالجة الرد للقناة")
 
     async def cmd_list_channel_emoji_replacements(self, event, args: str):
         """Handle list channel-specific emoji replacements command"""
