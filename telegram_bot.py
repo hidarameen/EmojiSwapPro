@@ -405,10 +405,8 @@ class TelegramEmojiBot:
             logger.error(f"Failed to perform delayed copy from {source_channel_id} to {target_channel_id}: {e}")
 
     async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
-        """Copy message content to target channel and apply emoji replacement"""
+        """Copy message content to target channel"""
         try:
-            sent_message = None
-            
             # Copy the message content instead of forwarding
             if message.text or message.message:
                 # Text message - preserve all formatting entities
@@ -420,7 +418,7 @@ class TelegramEmojiBot:
                     # Use the CustomParseMode unparse to handle custom emojis properly
                     unparsed_text, unparsed_entities = CustomParseMode.unparse(text_content, message.entities)
                     
-                    sent_message = await self.client.send_message(
+                    await self.client.send_message(
                         entity=target_channel_id,
                         message=unparsed_text,
                         formatting_entities=unparsed_entities,
@@ -428,7 +426,7 @@ class TelegramEmojiBot:
                     )
                 else:
                     # No entities, send plain text
-                    sent_message = await self.client.send_message(
+                    await self.client.send_message(
                         entity=target_channel_id,
                         message=text_content
                     )
@@ -441,7 +439,7 @@ class TelegramEmojiBot:
                 if message.entities and caption:
                     unparsed_caption, unparsed_entities = CustomParseMode.unparse(caption, message.entities)
                     
-                    sent_message = await self.client.send_file(
+                    await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
                         caption=unparsed_caption,
@@ -449,7 +447,7 @@ class TelegramEmojiBot:
                         parse_mode=None  # Use raw entities instead of parse mode
                     )
                 else:
-                    sent_message = await self.client.send_file(
+                    await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
                         caption=caption
@@ -460,10 +458,6 @@ class TelegramEmojiBot:
                 return
             
             logger.info(f"Copied message from {source_channel_id} to {target_channel_id} with preserved formatting")
-            
-            # Now apply emoji replacement to the copied message in the target channel
-            if sent_message:
-                await self._apply_emoji_replacement_to_message(sent_message, target_channel_id)
             
         except Exception as copy_error:
             logger.error(f"Failed to copy message from {source_channel_id} to {target_channel_id}: {copy_error}")
@@ -1360,97 +1354,6 @@ class TelegramEmojiBot:
         
         logger.info(f"Final unique emojis/symbols: {unique_emojis}")
         return unique_emojis
-
-    async def _apply_emoji_replacement_to_message(self, message, channel_id: int):
-        """Apply emoji replacement to a specific message in a target channel"""
-        try:
-            original_text = message.text or message.message
-            
-            logger.info(f"Attempting to replace emojis in copied message: '{original_text}'")
-            
-            if not original_text:
-                logger.info("No text in message, skipping emoji replacement")
-                return
-            
-            # Extract emojis from the message
-            found_emojis = self.extract_emojis_from_text(original_text)
-            logger.info(f"Found emojis in text: {found_emojis}")
-            
-            if not found_emojis:
-                logger.info("No emojis found in message text")
-                return
-            
-            # Check if replacement is enabled for this channel
-            replacement_enabled = self.channel_replacement_status.get(channel_id, True)
-            
-            if not replacement_enabled:
-                logger.info(f"Replacement disabled for channel {channel_id}, skipping")
-                return
-            
-            # Check if any of the found emojis have premium replacements
-            replacements_made = []
-            modified_text = original_text
-            
-            # Process text character by character to handle multiple same emojis correctly
-            import re
-            
-            # Create a list to track which emojis need replacement
-            # Priority: Channel-specific replacements first, then global replacements
-            emojis_to_replace = {}
-            
-            for emoji in found_emojis:
-                # Check channel-specific replacements first
-                if (channel_id in self.channel_emoji_mappings and 
-                    emoji in self.channel_emoji_mappings[channel_id]):
-                    emojis_to_replace[emoji] = self.channel_emoji_mappings[channel_id][emoji]
-                    replacements_made.append(emoji)
-                    logger.info(f"Found channel-specific replacement for {emoji}: {self.channel_emoji_mappings[channel_id][emoji]}")
-                # Then check global replacements
-                elif emoji in self.emoji_mappings:
-                    emojis_to_replace[emoji] = self.emoji_mappings[emoji]
-                    replacements_made.append(emoji)
-                    logger.info(f"Found global replacement for {emoji}: {self.emoji_mappings[emoji]}")
-                else:
-                    logger.info(f"No replacement found for emoji: {emoji}")
-            
-            if not emojis_to_replace:
-                return
-            
-            # Use regex to replace emojis one by one to avoid conflicts
-            for normal_emoji, premium_emoji_id in emojis_to_replace.items():
-                # Escape special regex characters in emoji
-                escaped_emoji = re.escape(normal_emoji)
-                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_emoji_id})"
-                
-                # Replace all occurrences of this specific emoji
-                modified_text = re.sub(escaped_emoji, premium_emoji_markdown, modified_text)
-            
-            # If replacements were made, edit the message
-            if replacements_made:
-                try:
-                    # Parse the text with custom parse mode to handle premium emojis
-                    try:
-                        parsed_text, entities = self.parse_mode.parse(modified_text)
-                    except Exception as parse_error:
-                        logger.error(f"Failed to parse premium emojis in text: {parse_error}")
-                        logger.error(f"Modified text: {modified_text}")
-                        return
-                    
-                    # Edit the copied message in target channel
-                    await self.client.edit_message(
-                        channel_id,
-                        message.id,
-                        parsed_text,
-                        formatting_entities=entities
-                    )
-                    
-                    logger.info(f"Replaced emojis in copied message {message.id} in target channel {channel_id}: {list(emojis_to_replace.keys())}")
-                    
-                except Exception as edit_error:
-                    logger.error(f"Failed to edit copied message {message.id} in target channel {channel_id}: {edit_error}")
-            
-        except Exception as e:
-            logger.error(f"Failed to replace emojis in copied message: {e}")
 
     async def replace_emojis_in_message(self, event):
         """Replace normal emojis with premium emojis in a message"""
@@ -4282,12 +4185,22 @@ class TelegramEmojiBot:
                     message_text = event.message.text or event.message.message or ""
                     logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
                     
-                    # Handle forwarding first (with original message)
-                    await self.forward_message_to_targets(event_peer_id, event.message)
-                    
-                    # Then handle emoji replacement in the source channel
+                    # Handle emoji replacement first
                     await self.replace_emojis_in_message(event)
                     
+                    # Then handle forwarding (after emoji replacement)
+                    # Get the updated message after emoji replacement
+                    updated_message = event.message
+                    try:
+                        # Try to get the most recent version of the message
+                        updated_message = await self.client.get_messages(event.chat, ids=event.message.id)
+                        if isinstance(updated_message, list) and len(updated_message) > 0:
+                            updated_message = updated_message[0]
+                    except Exception as e:
+                        logger.warning(f"Could not fetch updated message, using original: {e}")
+                        updated_message = event.message
+                    
+                    await self.forward_message_to_targets(event_peer_id, updated_message)
                     logger.info(f"Finished processing message in channel {event_peer_id}")
                     
             except Exception as e:
