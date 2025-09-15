@@ -223,7 +223,7 @@ class TelegramEmojiBot:
             return False
 
     def extract_emojis_from_text(self, text: str) -> List[str]:
-        """Extract all emojis from text using regex"""
+        """Extract all unique emojis from text using regex"""
         # Unicode emoji regex pattern
         emoji_pattern = re.compile(
             "["
@@ -238,7 +238,18 @@ class TelegramEmojiBot:
             "]+", flags=re.UNICODE
         )
         
-        return emoji_pattern.findall(text)
+        # Get all emojis found in text
+        found_emojis = emoji_pattern.findall(text)
+        
+        # Return unique emojis while preserving order
+        unique_emojis = []
+        seen = set()
+        for emoji in found_emojis:
+            if emoji not in seen:
+                unique_emojis.append(emoji)
+                seen.add(emoji)
+        
+        return unique_emojis
 
     async def replace_emojis_in_message(self, event):
         """Replace normal emojis with premium emojis in a message"""
@@ -259,13 +270,27 @@ class TelegramEmojiBot:
             replacements_made = []
             modified_text = original_text
             
+            # Process text character by character to handle multiple same emojis correctly
+            import re
+            
+            # Create a list to track which emojis need replacement
+            emojis_to_replace = {}
             for emoji in found_emojis:
                 if emoji in self.emoji_mappings:
-                    premium_emoji_id = self.emoji_mappings[emoji]
-                    # Replace emoji with markdown format for premium emoji
-                    premium_emoji_markdown = f"[{emoji}](emoji/{premium_emoji_id})"
-                    modified_text = modified_text.replace(emoji, premium_emoji_markdown)
+                    emojis_to_replace[emoji] = self.emoji_mappings[emoji]
                     replacements_made.append(emoji)
+            
+            if not emojis_to_replace:
+                return
+            
+            # Use regex to replace emojis one by one to avoid conflicts
+            for normal_emoji, premium_emoji_id in emojis_to_replace.items():
+                # Escape special regex characters in emoji
+                escaped_emoji = re.escape(normal_emoji)
+                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_emoji_id})"
+                
+                # Replace all occurrences of this specific emoji
+                modified_text = re.sub(escaped_emoji, premium_emoji_markdown, modified_text)
             
             # If replacements were made, edit the message
             if replacements_made:
@@ -286,7 +311,7 @@ class TelegramEmojiBot:
                         formatting_entities=entities
                     )
                     
-                    logger.info(f"Replaced emojis in message {message.id}: {replacements_made}")
+                    logger.info(f"Replaced emojis in message {message.id}: {list(emojis_to_replace.keys())}")
                     
                 except Exception as edit_error:
                     logger.error(f"Failed to edit message {message.id}: {edit_error}")
