@@ -71,6 +71,7 @@ class TelegramEmojiBot:
             'إضافة_قناة': 'add_channel',
             'عرض_القنوات': 'list_channels',
             'حذف_قناة': 'remove_channel',
+            'معرف_ايموجي': 'get_emoji_id',
             'مساعدة': 'help_command'
         }
 
@@ -490,11 +491,72 @@ class TelegramEmojiBot:
 • عرض_القنوات - عرض القنوات المراقبة
 • حذف_قناة <معرف_القناة> - حذف قناة من المراقبة
 
+🔍 أدوات مساعدة:
+• معرف_ايموجي <إيموجي_مميز> - عرض معرف الإيموجي المميز
+• أو رد على رسالة تحتوي على إيموجي مميز بكلمة "معرف_ايموجي"
+
 ❓ مساعدة - عرض هذه الرسالة
 
 ملاحظة: جميع الأوامر تعمل في الرسائل الخاصة فقط.
         """
         await event.reply(help_text.strip())
+
+    async def cmd_get_emoji_id(self, event, args: str):
+        """Handle get emoji ID command"""
+        try:
+            # Check if this is a reply to a message with custom emojis
+            if event.message.is_reply:
+                reply_msg = await event.message.get_reply_message()
+                if reply_msg and reply_msg.entities:
+                    custom_emojis = []
+                    for entity in reply_msg.entities:
+                        if isinstance(entity, MessageEntityCustomEmoji):
+                            custom_emojis.append(entity.document_id)
+                    
+                    if custom_emojis:
+                        response = "🔍 معرفات الإيموجي المميز في الرسالة:\n\n"
+                        for idx, emoji_id in enumerate(custom_emojis, 1):
+                            response += f"• الإيموجي {idx}: `{emoji_id}`\n"
+                        response += "\nيمكنك نسخ المعرف واستخدامه مع أمر إضافة_استبدال"
+                        await event.reply(response)
+                        return
+                    else:
+                        await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجي مميز")
+                        return
+                else:
+                    await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجي")
+                    return
+            
+            # Check for custom emojis in the current message
+            if event.message.entities:
+                custom_emojis = []
+                for entity in event.message.entities:
+                    if isinstance(entity, MessageEntityCustomEmoji):
+                        custom_emojis.append(entity.document_id)
+                
+                if custom_emojis:
+                    response = "🔍 معرفات الإيموجي المميز في رسالتك:\n\n"
+                    for idx, emoji_id in enumerate(custom_emojis, 1):
+                        response += f"• الإيموجي {idx}: `{emoji_id}`\n"
+                    response += "\nيمكنك نسخ المعرف واستخدامه مع أمر إضافة_استبدال"
+                    await event.reply(response)
+                    return
+            
+            # No custom emojis found
+            await event.reply("""
+❌ لم أجد أي إيموجي مميز.
+
+📋 طرق الاستخدام:
+1. أرسل "معرف_ايموجي" مع إيموجي مميز في نفس الرسالة
+2. رد على رسالة تحتوي على إيموجي مميز بكلمة "معرف_ايموجي"
+
+💡 مثال: معرف_ايموجي 🔥
+(استخدم إيموجي مميز بدلاً من العادي)
+            """.strip())
+                
+        except Exception as e:
+            logger.error(f"Failed to get emoji ID: {e}")
+            await event.reply("حدث خطأ أثناء البحث عن معرف الإيموجي")
 
     def setup_event_handlers(self):
         """Setup Telegram event handlers"""
