@@ -53,19 +53,28 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = ""
+args = "python telegram_bot.py"
 
 [workflows.workflow.metadata]
 outputType = "automations"
 
 [[workflows.workflow]]
-name = "Start inngest server"
+name = ""
 author = "agent"
+mode = "parallel"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "./scripts/inngest.sh"
-waitForPort = 3000
+args = "python telegram_bot.py"
 
 [workflows.workflow.metadata]
 outputType = "automations"
+
+[[workflows.workflow]]
+name = "Run"
+mode = "sequential"
+author = 46818261
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python telegram_bot.py"
