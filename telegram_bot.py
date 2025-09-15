@@ -147,8 +147,8 @@ class TelegramEmojiBot:
             return
         try:
             async with self.db_pool.acquire() as conn:
-                -- جدول command_queue محذوف من UserBot المستقل
-                -- هذا الجدول مخصص فقط للتواصل مع Control Bot
+                # جدول command_queue محذوف من UserBot المستقل
+                # هذا الجدول مخصص فقط للتواصل مع Control Bot
                 
                 # Emoji replacements table
                 await conn.execute("""
