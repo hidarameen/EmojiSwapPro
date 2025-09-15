@@ -540,28 +540,121 @@ class TelegramEmojiBot:
                 # Media message (photo, video, document, etc.)
                 caption = message.text or message.message or ""
                 
+                # Check if the caption contains markdown-style formatting that needs to be converted
+                needs_markdown_parse = False
+                if caption and ('**' in caption or '__' in caption or 
+                    '~~' in caption or '`' in caption or
+                    '[' in caption and '](' in caption):
+                    needs_markdown_parse = True
+                
                 # Preserve caption entities exactly as they are
                 if message.entities and caption:
                     # Log caption entities being preserved
                     logger.debug(f"Preserving {len(message.entities)} caption entities")
+                    premium_emoji_count = 0
                     for entity in message.entities:
                         entity_type = type(entity).__name__
-                        logger.debug(f"  - Caption {entity_type} at offset {entity.offset}, length {entity.length}")
+                        if isinstance(entity, MessageEntityCustomEmoji):
+                            premium_emoji_count += 1
+                            logger.debug(f"  - Caption Premium Emoji: {entity_type} at offset {entity.offset}, length {entity.length}, ID: {entity.document_id}")
+                        else:
+                            logger.debug(f"  - Caption {entity_type} at offset {entity.offset}, length {entity.length}")
                     
-                    await self.client.send_file(
-                        entity=target_channel_id,
-                        file=message.media,
-                        caption=caption,
-                        formatting_entities=message.entities,
-                        parse_mode=None,  # Use raw entities to preserve everything exactly
-                        supports_streaming=True  # Enable streaming for better performance
-                    )
+                    logger.info(f"Copying media with caption containing {premium_emoji_count} premium emojis and {len(message.entities) - premium_emoji_count} other formatting entities")
+                    
+                    # If the caption still contains markdown syntax, parse it to get proper entities
+                    if needs_markdown_parse:
+                        try:
+                            # Parse the caption with markdown to get proper formatting entities
+                            parsed_caption, parsed_entities = self.parse_mode.parse(caption)
+                            
+                            # Merge existing custom emoji entities with new formatting entities
+                            final_entities = []
+                            
+                            # Add custom emoji entities from the original message
+                            for entity in message.entities:
+                                if isinstance(entity, MessageEntityCustomEmoji):
+                                    final_entities.append(entity)
+                            
+                            # Add formatting entities from markdown parsing (but skip custom emojis to avoid duplicates)
+                            for entity in parsed_entities:
+                                if not isinstance(entity, MessageEntityCustomEmoji):
+                                    final_entities.append(entity)
+                            
+                            # Sort entities by offset to maintain proper order
+                            final_entities.sort(key=lambda e: e.offset)
+                            
+                            logger.info(f"Parsed caption markdown and merged entities: {len(final_entities)} total entities")
+                            
+                            await self.client.send_file(
+                                entity=target_channel_id,
+                                file=message.media,
+                                caption=parsed_caption,
+                                formatting_entities=final_entities,
+                                parse_mode=None,
+                                supports_streaming=True
+                            )
+                        except Exception as parse_error:
+                            logger.warning(f"Failed to parse markdown in caption, using original entities: {parse_error}")
+                            # Fallback to original method
+                            await self.client.send_file(
+                                entity=target_channel_id,
+                                file=message.media,
+                                caption=caption,
+                                formatting_entities=message.entities,
+                                parse_mode=None,
+                                supports_streaming=True
+                            )
+                    else:
+                        # No markdown syntax detected, use entities as-is
+                        await self.client.send_file(
+                            entity=target_channel_id,
+                            file=message.media,
+                            caption=caption,
+                            formatting_entities=message.entities,
+                            parse_mode=None,
+                            supports_streaming=True
+                        )
+                elif caption:
+                    # Caption without entities, but check if it has markdown that should be parsed
+                    if needs_markdown_parse:
+                        try:
+                            parsed_caption, parsed_entities = self.parse_mode.parse(caption)
+                            logger.info(f"Parsing markdown for caption without entities: {len(parsed_entities)} entities found")
+                            await self.client.send_file(
+                                entity=target_channel_id,
+                                file=message.media,
+                                caption=parsed_caption,
+                                formatting_entities=parsed_entities,
+                                parse_mode=None,
+                                supports_streaming=True
+                            )
+                        except Exception as parse_error:
+                            logger.warning(f"Failed to parse markdown in caption, sending as plain text: {parse_error}")
+                            await self.client.send_file(
+                                entity=target_channel_id,
+                                file=message.media,
+                                caption=caption,
+                                parse_mode=None,
+                                supports_streaming=True
+                            )
+                    else:
+                        # No entities and no markdown, send with plain caption
+                        logger.info("Copying media with plain caption (no formatting entities)")
+                        await self.client.send_file(
+                            entity=target_channel_id,
+                            file=message.media,
+                            caption=caption,
+                            parse_mode=None,
+                            supports_streaming=True
+                        )
                 else:
+                    # Media without caption
+                    logger.info("Copying media without caption")
                     await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
-                        caption=caption,
-                        parse_mode=None
+                        supports_streaming=True
                     )
             else:
                 # Handle other message types like stickers, animations, etc.
