@@ -63,6 +63,7 @@ class TelegramEmojiBot:
         self.emoji_mappings: Dict[str, int] = {}  # Global replacements
         self.channel_emoji_mappings: Dict[int, Dict[str, int]] = {}  # Channel-specific replacements
         self.monitored_channels: Dict[int, Dict[str, str]] = {}
+        self.channel_replacement_status: Dict[int, bool] = {}  # Channel replacement activation status
         
         # Cache for admin list
         self.admin_ids: set = {6602517122}  # Default admin
@@ -76,6 +77,9 @@ class TelegramEmojiBot:
             'نسخ_استبدالات_قناة': 'copy_channel_emoji_replacements',
             'حذف_جميع_الاستبدالات': 'delete_all_emoji_replacements',
             'تنظيف_الاستبدالات': 'clean_duplicate_replacements',
+            'تفعيل_استبدال_قناة': 'activate_channel_replacement',
+            'تعطيل_استبدال_قناة': 'deactivate_channel_replacement',
+            'حالة_استبدال_قناة': 'check_channel_replacement_status',
             'إضافة_استبدال': 'add_emoji_replacement',
             'عرض_الاستبدالات': 'list_emoji_replacements', 
             'حذف_استبدال': 'delete_emoji_replacement',
@@ -158,8 +162,14 @@ class TelegramEmojiBot:
             return
         try:
             async with self.db_pool.acquire() as conn:
+                # Add replacement_active column if it doesn't exist
+                await conn.execute("""
+                    ALTER TABLE monitored_channels 
+                    ADD COLUMN IF NOT EXISTS replacement_active BOOLEAN DEFAULT TRUE
+                """)
+                
                 rows = await conn.fetch(
-                    "SELECT channel_id, channel_username, channel_title FROM monitored_channels WHERE is_active = TRUE"
+                    "SELECT channel_id, channel_username, channel_title, replacement_active FROM monitored_channels WHERE is_active = TRUE"
                 )
                 self.monitored_channels = {
                     row['channel_id']: {
@@ -168,7 +178,16 @@ class TelegramEmojiBot:
                     }
                     for row in rows
                 }
+                
+                # Load replacement activation status
+                self.channel_replacement_status = {
+                    row['channel_id']: row['replacement_active'] if row['replacement_active'] is not None else True
+                    for row in rows
+                }
+                
                 logger.info(f"Loaded {len(self.monitored_channels)} monitored channels from database")
+                active_replacements = sum(1 for active in self.channel_replacement_status.values() if active)
+                logger.info(f"Replacement active in {active_replacements} channels")
         except Exception as e:
             logger.error(f"Failed to load monitored channels: {e}")
 
@@ -423,10 +442,10 @@ class TelegramEmojiBot:
         try:
             async with self.db_pool.acquire() as conn:
                 await conn.execute(
-                    """INSERT INTO monitored_channels (channel_id, channel_username, channel_title, is_active) 
-                       VALUES ($1, $2, $3, TRUE) 
+                    """INSERT INTO monitored_channels (channel_id, channel_username, channel_title, is_active, replacement_active) 
+                       VALUES ($1, $2, $3, TRUE, TRUE) 
                        ON CONFLICT (channel_id) 
-                       DO UPDATE SET channel_username = $2, channel_title = $3, is_active = TRUE""",
+                       DO UPDATE SET channel_username = $2, channel_title = $3, is_active = TRUE, replacement_active = COALESCE(monitored_channels.replacement_active, TRUE)""",
                     channel_id, channel_username, channel_title
                 )
                 
@@ -435,6 +454,10 @@ class TelegramEmojiBot:
                     'username': channel_username or '',
                     'title': channel_title or ''
                 }
+                # Set default replacement status to active for new channels
+                if channel_id not in self.channel_replacement_status:
+                    self.channel_replacement_status[channel_id] = True
+                    
                 logger.info(f"Added/updated monitored channel: {channel_id}")
                 return True
                 
@@ -685,6 +708,14 @@ class TelegramEmojiBot:
                 logger.info("No emojis found in message text")
                 return
             
+            # Check if replacement is enabled for this channel
+            event_peer_id = utils.get_peer_id(event.chat)
+            replacement_enabled = self.channel_replacement_status.get(event_peer_id, True)
+            
+            if not replacement_enabled:
+                logger.info(f"Replacement disabled for channel {event_peer_id}, skipping")
+                return
+            
             # Check if any of the found emojis have premium replacements
             replacements_made = []
             modified_text = original_text
@@ -695,7 +726,6 @@ class TelegramEmojiBot:
             # Create a list to track which emojis need replacement
             # Priority: Channel-specific replacements first, then global replacements
             emojis_to_replace = {}
-            event_peer_id = utils.get_peer_id(event.chat)
             
             for emoji in found_emojis:
                 # Check channel-specific replacements first
@@ -1288,7 +1318,19 @@ class TelegramEmojiBot:
             for channel_id, info in self.monitored_channels.items():
                 title = info['title'] or 'غير معروف'
                 username = info['username'] or 'غير متاح'
-                response += f"• {title} (@{username})\n  معرف: {channel_id}\n\n"
+                
+                # Get replacement status
+                is_active = self.channel_replacement_status.get(channel_id, True)
+                status_icon = "✅" if is_active else "❌"
+                status_text = "مُفعل" if is_active else "مُعطل"
+                
+                # Count replacements
+                replacement_count = len(self.channel_emoji_mappings.get(channel_id, {}))
+                
+                response += f"• {title} (@{username})\n"
+                response += f"  معرف: {channel_id}\n"
+                response += f"  الاستبدال: {status_icon} {status_text}\n"
+                response += f"  الاستبدالات: {replacement_count}\n\n"
             
             await event.reply(response)
             
@@ -2006,6 +2048,163 @@ class TelegramEmojiBot:
             logger.error(f"Failed to copy channel emoji replacements: {e}")
             await event.reply("حدث خطأ أثناء نسخ الاستبدالات")
 
+    async def cmd_activate_channel_replacement(self, event, args: str):
+        """Handle activate channel replacement command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: تفعيل_استبدال_قناة <معرف_القناة>")
+                return
+
+            try:
+                channel_id = int(args.strip())
+            except ValueError:
+                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                return
+
+            if channel_id not in self.monitored_channels:
+                await event.reply("❌ هذه القناة غير مراقبة. أضفها أولاً باستخدام أمر إضافة_قناة")
+                return
+
+            if self.db_pool is None:
+                await event.reply("❌ قاعدة البيانات غير متاحة")
+                return
+
+            try:
+                async with self.db_pool.acquire() as conn:
+                    result = await conn.execute(
+                        "UPDATE monitored_channels SET replacement_active = TRUE WHERE channel_id = $1",
+                        channel_id
+                    )
+                    
+                    if result in ['UPDATE 1', 'UPDATE 0']:
+                        # Update cache
+                        self.channel_replacement_status[channel_id] = True
+                        
+                        channel_name = self.monitored_channels[channel_id].get('title', 'Unknown Channel')
+                        await event.reply(f"✅ تم تفعيل الاستبدال في القناة: {channel_name}")
+                        logger.info(f"Activated replacement for channel {channel_id}")
+                        return True
+                    else:
+                        await event.reply("❌ فشل في تفعيل الاستبدال")
+                        return False
+
+            except Exception as e:
+                logger.error(f"Database error in activate_channel_replacement: {e}")
+                await event.reply("❌ حدث خطأ في قاعدة البيانات")
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to activate channel replacement: {e}")
+            await event.reply("حدث خطأ أثناء تفعيل الاستبدال")
+
+    async def cmd_deactivate_channel_replacement(self, event, args: str):
+        """Handle deactivate channel replacement command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: تعطيل_استبدال_قناة <معرف_القناة>")
+                return
+
+            try:
+                channel_id = int(args.strip())
+            except ValueError:
+                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                return
+
+            if channel_id not in self.monitored_channels:
+                await event.reply("❌ هذه القناة غير مراقبة")
+                return
+
+            if self.db_pool is None:
+                await event.reply("❌ قاعدة البيانات غير متاحة")
+                return
+
+            try:
+                async with self.db_pool.acquire() as conn:
+                    result = await conn.execute(
+                        "UPDATE monitored_channels SET replacement_active = FALSE WHERE channel_id = $1",
+                        channel_id
+                    )
+                    
+                    if result in ['UPDATE 1', 'UPDATE 0']:
+                        # Update cache
+                        self.channel_replacement_status[channel_id] = False
+                        
+                        channel_name = self.monitored_channels[channel_id].get('title', 'Unknown Channel')
+                        await event.reply(f"✅ تم تعطيل الاستبدال في القناة: {channel_name}")
+                        logger.info(f"Deactivated replacement for channel {channel_id}")
+                        return True
+                    else:
+                        await event.reply("❌ فشل في تعطيل الاستبدال")
+                        return False
+
+            except Exception as e:
+                logger.error(f"Database error in deactivate_channel_replacement: {e}")
+                await event.reply("❌ حدث خطأ في قاعدة البيانات")
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to deactivate channel replacement: {e}")
+            await event.reply("حدث خطأ أثناء تعطيل الاستبدال")
+
+    async def cmd_check_channel_replacement_status(self, event, args: str):
+        """Handle check channel replacement status command"""
+        try:
+            if not args.strip():
+                # Show status for all monitored channels
+                if not self.monitored_channels:
+                    await event.reply("لا توجد قنوات مراقبة")
+                    return
+
+                response = "📊 حالة الاستبدال للقنوات المراقبة:\n\n"
+                
+                for channel_id, channel_info in self.monitored_channels.items():
+                    channel_name = channel_info.get('title', 'Unknown Channel')
+                    is_active = self.channel_replacement_status.get(channel_id, True)
+                    status_icon = "✅" if is_active else "❌"
+                    status_text = "مُفعل" if is_active else "مُعطل"
+                    
+                    response += f"• {channel_name}\n"
+                    response += f"  المعرف: {channel_id}\n"
+                    response += f"  الحالة: {status_icon} {status_text}\n\n"
+
+                await event.reply(response)
+                return
+
+            try:
+                channel_id = int(args.strip())
+            except ValueError:
+                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                return
+
+            if channel_id not in self.monitored_channels:
+                await event.reply("❌ هذه القناة غير مراقبة")
+                return
+
+            channel_name = self.monitored_channels[channel_id].get('title', 'Unknown Channel')
+            is_active = self.channel_replacement_status.get(channel_id, True)
+            status_icon = "✅" if is_active else "❌"
+            status_text = "مُفعل" if is_active else "مُعطل"
+            
+            # Count replacements for this channel
+            replacement_count = len(self.channel_emoji_mappings.get(channel_id, {}))
+            
+            response = f"📊 حالة القناة: {channel_name}\n\n"
+            response += f"🆔 المعرف: {channel_id}\n"
+            response += f"🔄 حالة الاستبدال: {status_icon} {status_text}\n"
+            response += f"📝 عدد الاستبدالات: {replacement_count}\n\n"
+            
+            if is_active:
+                response += "💡 الاستبدال مُفعل - سيتم استبدال الإيموجيات تلقائياً"
+            else:
+                response += "💡 الاستبدال مُعطل - لن يتم استبدال الإيموجيات\n"
+                response += "استخدم 'تفعيل_استبدال_قناة' لتفعيل الاستبدال"
+
+            await event.reply(response)
+
+        except Exception as e:
+            logger.error(f"Failed to check channel replacement status: {e}")
+            await event.reply("حدث خطأ أثناء فحص حالة الاستبدال")
+
     async def cmd_help_command(self, event, args: str):
         """Handle help command"""
         help_text = """
@@ -2024,6 +2223,9 @@ class TelegramEmojiBot:
 • حذف_استبدال_قناة <معرف_القناة> <إيموجي> - حذف استبدال من قناة
 • حذف_جميع_استبدالات_قناة <معرف_القناة> تأكيد - حذف جميع استبدالات القناة
 • نسخ_استبدالات_قناة <معرف_المصدر> <معرف_الهدف> - نسخ الاستبدالات
+• تفعيل_استبدال_قناة <معرف_القناة> - تفعيل الاستبدال في القناة
+• تعطيل_استبدال_قناة <معرف_القناة> - تعطيل الاستبدال في القناة
+• حالة_استبدال_قناة [معرف_القناة] - فحص حالة الاستبدال
 
 📺 إدارة القنوات:
 • إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة
