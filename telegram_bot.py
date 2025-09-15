@@ -546,6 +546,7 @@ class TelegramEmojiBot:
                 try:
                     # Use send_file directly with message.media without downloading
                     logger.info("Copying media file directly using send_file with message.media")
+                    logger.info(f"Media object type: {type(message.media).__name__}")
                     
                     # Check if the caption contains markdown-style formatting that needs to be converted
                     needs_markdown_parse = False
@@ -614,14 +615,28 @@ class TelegramEmojiBot:
                                 )
                         else:
                             # No markdown syntax detected, use entities as-is
-                            await self.client.send_file(
-                                entity=target_channel_id,
-                                file=message.media,
-                                caption=caption,
-                                formatting_entities=message.entities,
-                                parse_mode=None,
-                                supports_streaming=True
-                            )
+                            try:
+                                await self.client.send_file(
+                                    entity=target_channel_id,
+                                    file=message.media,
+                                    caption=caption,
+                                    formatting_entities=message.entities,
+                                    parse_mode=None,
+                                    supports_streaming=True,
+                                    force_document=False  # Keep original media type
+                                )
+                                logger.info("Successfully sent media with original entities")
+                            except Exception as send_error:
+                                logger.error(f"Error in send_file with entities: {send_error}")
+                                # Fallback: try without entities
+                                await self.client.send_file(
+                                    entity=target_channel_id,
+                                    file=message.media,
+                                    caption=caption,
+                                    supports_streaming=True,
+                                    force_document=False
+                                )
+                                logger.info("Sent media with caption but without entities as fallback")
                     elif caption:
                         # Caption without entities, but check if it has markdown that should be parsed
                         if needs_markdown_parse:
@@ -658,37 +673,68 @@ class TelegramEmojiBot:
                     else:
                         # Media without caption
                         logger.info("Copying media without caption")
-                        await self.client.send_file(
-                            entity=target_channel_id,
-                            file=message.media,
-                            supports_streaming=True
-                        )
+                        try:
+                            await self.client.send_file(
+                                entity=target_channel_id,
+                                file=message.media,
+                                supports_streaming=True,
+                                force_document=False  # Keep original media type
+                            )
+                            logger.info("Successfully sent media without caption")
+                        except Exception as send_error:
+                            logger.error(f"Error sending media without caption: {send_error}")
+                            raise
                     
                     logger.info(f"Successfully sent media file to target channel using direct send_file")
                 
                 except Exception as media_error:
                     logger.error(f"Error handling media file: {media_error}")
-                    # Fallback: try direct forwarding for media
-                    logger.info("Trying fallback method: forwarding media message")
+                    logger.error(f"Media type: {type(message.media)}")
+                    logger.error(f"Message ID: {message.id}")
+                    
+                    # Try alternative media handling methods
+                    logger.info("Trying alternative media copy methods...")
+                    
+                    # Method 1: Try downloading and re-uploading
                     try:
-                        await self.client.forward_messages(
-                            entity=target_channel_id,
-                            messages=message,
-                            from_peer=source_channel_id
-                        )
-                        logger.info("Fallback forwarding successful")
-                    except Exception as forward_error:
-                        logger.error(f"Fallback forwarding also failed: {forward_error}")
-                        # Final fallback: send caption only
-                        if caption:
-                            logger.info("Final fallback: sending caption only")
-                            await self.client.send_message(
+                        logger.info("Attempting to download and re-upload media")
+                        downloaded_media = await self.client.download_media(message, bytes)
+                        if downloaded_media:
+                            await self.client.send_file(
                                 entity=target_channel_id,
-                                message=f"⚠️ فشل في نسخ الوسائط، النص فقط:\n\n{caption}",
+                                file=downloaded_media,
+                                caption=caption,
+                                formatting_entities=message.entities if caption else None,
                                 parse_mode=None
                             )
+                            logger.info("Successfully sent media via download-upload method")
                         else:
-                            logger.info("No caption to send as fallback")
+                            raise Exception("Failed to download media")
+                            
+                    except Exception as download_error:
+                        logger.error(f"Download-upload method failed: {download_error}")
+                        
+                        # Method 2: Try direct forwarding for media
+                        logger.info("Trying fallback method: forwarding media message")
+                        try:
+                            await self.client.forward_messages(
+                                entity=target_channel_id,
+                                messages=message,
+                                from_peer=source_channel_id
+                            )
+                            logger.info("Fallback forwarding successful")
+                        except Exception as forward_error:
+                            logger.error(f"Fallback forwarding also failed: {forward_error}")
+                            # Final fallback: send caption only
+                            if caption:
+                                logger.info("Final fallback: sending caption only")
+                                await self.client.send_message(
+                                    entity=target_channel_id,
+                                    message=f"⚠️ فشل في نسخ الوسائط، النص فقط:\n\n{caption}",
+                                    parse_mode=None
+                                )
+                            else:
+                                logger.info("No caption to send as fallback")
             else:
                 # Handle other message types like stickers, animations, etc.
                 # These don't have text formatting but may have custom properties
