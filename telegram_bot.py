@@ -433,11 +433,21 @@ class TelegramEmojiBot:
                         failed_replacements.append(f"السطر {line_num}: لم أجد إيموجي مميز أو معرف صحيح")
                         continue
                 
-                # Add replacements for all normal emojis
+                # Check which emojis are new and which already exist
+                new_emojis = []
+                existing_emojis = []
+                
+                for normal_emoji in normal_emojis:
+                    if normal_emoji in self.emoji_mappings:
+                        existing_emojis.append(normal_emoji)
+                    else:
+                        new_emojis.append(normal_emoji)
+                
+                # Add replacements only for new emojis
                 line_success_count = 0
                 line_failed_emojis = []
                 
-                for normal_emoji in normal_emojis:
+                for normal_emoji in new_emojis:
                     success = await self.add_emoji_replacement(normal_emoji, premium_emoji_id, description)
                     
                     if success:
@@ -447,8 +457,12 @@ class TelegramEmojiBot:
                 
                 # Report results for this line
                 if line_success_count > 0:
-                    emoji_list = ", ".join(normal_emojis[:line_success_count])
+                    emoji_list = ", ".join(new_emojis[:line_success_count])
                     successful_replacements.append(f"{emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+                
+                if existing_emojis:
+                    existing_emoji_list = ", ".join(existing_emojis)
+                    failed_replacements.append(f"السطر {line_num}: موجود مسبقاً: {existing_emoji_list}")
                 
                 if line_failed_emojis:
                     failed_emoji_list = ", ".join(line_failed_emojis)
