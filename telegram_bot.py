@@ -405,56 +405,96 @@ class TelegramEmojiBot:
             logger.error(f"Failed to perform delayed copy from {source_channel_id} to {target_channel_id}: {e}")
 
     async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
-        """Copy message content to target channel"""
+        """Copy message content to target channel with full formatting preservation"""
         try:
             # Copy the message content instead of forwarding
             if message.text or message.message:
-                # Text message - preserve all formatting entities including custom emojis
+                # Text message - preserve ALL formatting entities including:
+                # - Bold, Italic, Underline, Strikethrough
+                # - Code, Pre (code blocks)
+                # - Links, Mentions
+                # - Custom emojis
+                # - Spoilers
+                # - And all other Telegram formatting
                 text_content = message.text or message.message
                 
-                # Preserve all entities as-is to maintain premium emojis
+                # Preserve all entities exactly as they are to maintain complete formatting
                 if message.entities:
+                    # Log the entities being preserved for debugging
+                    logger.debug(f"Preserving {len(message.entities)} formatting entities")
+                    for entity in message.entities:
+                        entity_type = type(entity).__name__
+                        logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
+                    
                     await self.client.send_message(
                         entity=target_channel_id,
                         message=text_content,
                         formatting_entities=message.entities,
-                        parse_mode=None  # Use raw entities to preserve everything
+                        parse_mode=None,  # Use raw entities to preserve everything exactly
+                        link_preview=False  # Disable link preview to avoid conflicts
                     )
                 else:
                     # No entities, send plain text
                     await self.client.send_message(
                         entity=target_channel_id,
-                        message=text_content
+                        message=text_content,
+                        parse_mode=None
                     )
                     
             elif message.media:
                 # Media message (photo, video, document, etc.)
                 caption = message.text or message.message or ""
                 
-                # Preserve caption entities as-is
+                # Preserve caption entities exactly as they are
                 if message.entities and caption:
+                    # Log caption entities being preserved
+                    logger.debug(f"Preserving {len(message.entities)} caption entities")
+                    for entity in message.entities:
+                        entity_type = type(entity).__name__
+                        logger.debug(f"  - Caption {entity_type} at offset {entity.offset}, length {entity.length}")
+                    
                     await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
                         caption=caption,
                         formatting_entities=message.entities,
-                        parse_mode=None  # Use raw entities to preserve everything
+                        parse_mode=None,  # Use raw entities to preserve everything exactly
+                        supports_streaming=True  # Enable streaming for better performance
                     )
                 else:
                     await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
-                        caption=caption
+                        caption=caption,
+                        parse_mode=None
                     )
             else:
-                # Other types of messages
-                logger.warning(f"Unsupported message type for copying from {source_channel_id}")
-                return
+                # Handle other message types like stickers, animations, etc.
+                # These don't have text formatting but may have custom properties
+                if hasattr(message, 'sticker') and message.sticker:
+                    # Copy sticker
+                    await self.client.send_file(
+                        entity=target_channel_id,
+                        file=message.media
+                    )
+                elif hasattr(message, 'document') and message.document:
+                    # Copy document/file
+                    await self.client.send_file(
+                        entity=target_channel_id,
+                        file=message.media
+                    )
+                else:
+                    logger.warning(f"Unsupported message type for copying from {source_channel_id}: {type(message)}")
+                    return
             
-            logger.info(f"Copied message from {source_channel_id} to {target_channel_id} with preserved formatting and premium emojis")
+            logger.info(f"Copied message from {source_channel_id} to {target_channel_id} with complete formatting preservation")
             
         except Exception as copy_error:
             logger.error(f"Failed to copy message from {source_channel_id} to {target_channel_id}: {copy_error}")
+            # Log additional details for debugging
+            logger.error(f"Message type: {type(message)}, Has text: {bool(message.text or message.message)}, Has media: {bool(message.media)}")
+            if message.entities:
+                logger.error(f"Entities count: {len(message.entities)}")
 
     async def load_admin_ids(self):
         """Load admin IDs from database into cache"""
@@ -1427,24 +1467,47 @@ class TelegramEmojiBot:
                 try:
                     # Parse the text with custom parse mode to handle premium emojis
                     try:
-                        parsed_text, entities = self.parse_mode.parse(modified_text)
+                        parsed_text, new_entities = self.parse_mode.parse(modified_text)
                     except Exception as parse_error:
                         logger.error(f"Failed to parse premium emojis in text: {parse_error}")
                         logger.error(f"Modified text: {modified_text}")
                         return
                     
-                    # Edit the original message
+                    # Merge new premium emoji entities with existing formatting entities
+                    # This preserves bold, italic, and other formatting while adding premium emojis
+                    final_entities = []
+                    
+                    # Add existing non-emoji entities (bold, italic, links, etc.)
+                    if message.entities:
+                        for entity in message.entities:
+                            # Skip existing custom emoji entities as they'll be replaced
+                            if not hasattr(entity, 'document_id'):
+                                final_entities.append(entity)
+                    
+                    # Add new premium emoji entities
+                    if new_entities:
+                        for entity in new_entities:
+                            # Only add custom emoji entities from the parsed text
+                            if hasattr(entity, 'document_id'):
+                                final_entities.append(entity)
+                    
+                    # Sort entities by offset to maintain proper order
+                    final_entities.sort(key=lambda e: e.offset)
+                    
+                    # Edit the original message with merged entities
                     await self.client.edit_message(
                         event.chat_id,
                         message.id,
                         parsed_text,
-                        formatting_entities=entities
+                        formatting_entities=final_entities,
+                        parse_mode=None  # Use raw entities to preserve everything
                     )
                     
-                    logger.info(f"Replaced emojis in message {message.id}: {list(emojis_to_replace.keys())}")
+                    logger.info(f"Replaced emojis in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
                     
                 except Exception as edit_error:
                     logger.error(f"Failed to edit message {message.id}: {edit_error}")
+                    logger.error(f"Final entities count: {len(final_entities) if 'final_entities' in locals() else 'unknown'}")
             
         except Exception as e:
             logger.error(f"Failed to replace emojis in message: {e}")
