@@ -332,27 +332,48 @@ class TelegramEmojiBot:
     async def cmd_add_emoji_replacement(self, event, args: str):
         """Handle add emoji replacement command"""
         try:
-            # Expected format: "😀 12345 وصف اختياري"
+            # New format: "😀 🔥 وصف اختياري" where 🔥 is a premium emoji
             parts = args.split(None, 2)
             if len(parts) < 2:
-                await event.reply("الاستخدام: إضافة_استبدال <إيموجي> <معرف_البريميوم> [وصف]")
+                await event.reply("الاستخدام: إضافة_استبدال <إيموجي_عادي> <إيموجي_مميز> [وصف]")
                 return
             
             normal_emoji = parts[0]
-            try:
-                premium_emoji_id = int(parts[1])
-            except ValueError:
-                await event.reply("معرف الإيموجي البريميوم يجب أن يكون رقماً")
-                return
-            
             description = parts[2] if len(parts) > 2 else None
+            
+            # Find premium emoji in the message entities
+            premium_emoji_id = None
+            if event.message.entities:
+                for entity in event.message.entities:
+                    if isinstance(entity, MessageEntityCustomEmoji):
+                        premium_emoji_id = entity.document_id
+                        break
+            
+            # Fallback: try to parse as number (old format support)
+            if premium_emoji_id is None:
+                try:
+                    premium_emoji_id = int(parts[1])
+                except ValueError:
+                    await event.reply("""
+❌ لم أجد إيموجي مميز في الرسالة.
+
+📋 طرق الاستخدام:
+1. الطريقة الجديدة (مستحسنة): إضافة_استبدال 😀 🔥 وصف
+   استخدم إيموجي مميز حقيقي بدلاً من 🔥
+
+2. الطريقة القديمة: إضافة_استبدال 😀 1234567890 وصف
+   استخدم معرف الإيموجي الرقمي
+
+💡 استخدم أمر "معرف_ايموجي" لمعرفة معرف أي إيموجي مميز
+                    """.strip())
+                    return
             
             success = await self.add_emoji_replacement(normal_emoji, premium_emoji_id, description)
             
             if success:
-                await event.reply(f"تم إضافة استبدال الإيموجي بنجاح: {normal_emoji} -> {premium_emoji_id}")
+                await event.reply(f"✅ تم إضافة استبدال الإيموجي بنجاح!\n{normal_emoji} ← إيموجي مميز (ID: {premium_emoji_id})")
             else:
-                await event.reply("فشل في إضافة استبدال الإيموجي")
+                await event.reply("❌ فشل في إضافة استبدال الإيموجي")
                 
         except Exception as e:
             logger.error(f"Failed to add emoji replacement: {e}")
@@ -482,7 +503,7 @@ class TelegramEmojiBot:
 🤖 أوامر بوت استبدال الإيموجي:
 
 📝 إدارة الاستبدالات:
-• إضافة_استبدال <إيموجي> <معرف_البريميوم> [وصف]
+• إضافة_استبدال <إيموجي_عادي> <إيموجي_مميز> [وصف]
 • عرض_الاستبدالات - عرض جميع الاستبدالات
 • حذف_استبدال <إيموجي> - حذف استبدال
 
