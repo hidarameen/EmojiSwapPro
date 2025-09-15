@@ -801,10 +801,11 @@ class TelegramEmojiBot:
                     else:
                         line_failed_emojis.append(normal_emoji)
                 
-                # Report results for this line
+                # Report results for this line with premium emoji display
                 if line_success_count > 0:
                     emoji_list = ", ".join(new_emojis[:line_success_count])
-                    successful_replacements.append(f"{emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+                    premium_emoji_markdown = f"[💎](emoji/{premium_emoji_id})"
+                    successful_replacements.append(f"{emoji_list} → {premium_emoji_markdown} (ID: {premium_emoji_id})")
                 
                 if existing_emojis:
                     existing_emoji_list = ", ".join(existing_emojis)
@@ -814,25 +815,46 @@ class TelegramEmojiBot:
                     failed_emoji_list = ", ".join(line_failed_emojis)
                     failed_replacements.append(f"السطر {line_num}: فشل في حفظ {failed_emoji_list}")
             
-            # Prepare response
+            # Prepare response with premium emojis
             response_parts = []
+            fallback_parts = []
             
             if successful_replacements:
                 response_parts.append("✅ تم إضافة الاستبدالات التالية بنجاح:")
+                fallback_parts.append("✅ تم إضافة الاستبدالات التالية بنجاح:")
                 for replacement in successful_replacements:
                     response_parts.append(f"• {replacement}")
+                    # Create fallback version
+                    fallback_parts.append(f"• {replacement.replace('إيموجي مميز', 'إيموجي مميز')}")
             
             if failed_replacements:
                 if successful_replacements:
                     response_parts.append("")
+                    fallback_parts.append("")
                 response_parts.append("❌ فشل في إضافة الاستبدالات التالية:")
+                fallback_parts.append("❌ فشل في إضافة الاستبدالات التالية:")
                 for failure in failed_replacements:
                     response_parts.append(f"• {failure}")
+                    fallback_parts.append(f"• {failure}")
             
             if not successful_replacements and not failed_replacements:
                 response_parts.append("❌ لم يتم العثور على استبدالات صالحة")
+                fallback_parts.append("❌ لم يتم العثور على استبدالات صالحة")
             
-            await event.reply("\n".join(response_parts))
+            # Try to send with premium emojis first
+            try:
+                response_text = "\n".join(response_parts)
+                parsed_text, entities = self.parse_mode.parse(response_text)
+                await self.client.send_message(
+                    event.chat_id,
+                    parsed_text,
+                    formatting_entities=entities
+                )
+            except Exception as parse_error:
+                logger.error(f"Failed to parse premium emojis in add_emoji_replacement response: {parse_error}")
+                # Use fallback format
+                fallback_response = "\n".join(fallback_parts)
+                await event.reply(fallback_response)
                 
         except Exception as e:
             logger.error(f"Failed to add emoji replacement: {e}")
@@ -884,28 +906,52 @@ class TelegramEmojiBot:
                 else:
                     failed_replacements.append(normal_emoji)
             
-            # Prepare response
+            # Prepare response with premium emoji display
             response_parts = []
+            fallback_parts = []
             
             if successful_replacements:
                 emoji_list = ", ".join(successful_replacements)
+                premium_emoji_markdown = f"[💎](emoji/{premium_emoji_id})"
+                
                 response_parts.append(f"✅ تم إضافة الاستبدالات التالية بنجاح:")
-                response_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+                response_parts.append(f"• {emoji_list} → {premium_emoji_markdown} (ID: {premium_emoji_id})")
+                
+                fallback_parts.append(f"✅ تم إضافة الاستبدالات التالية بنجاح:")
+                fallback_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
             
             if existing_emojis:
                 if successful_replacements:
                     response_parts.append("")
+                    fallback_parts.append("")
                 response_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
+                fallback_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
             
             if failed_replacements:
                 if successful_replacements or existing_emojis:
                     response_parts.append("")
+                    fallback_parts.append("")
                 response_parts.append(f"❌ فشل في إضافة: {', '.join(failed_replacements)}")
+                fallback_parts.append(f"❌ فشل في إضافة: {', '.join(failed_replacements)}")
             
             if not response_parts:
                 response_parts.append("❌ لم يتم إضافة أي استبدالات")
+                fallback_parts.append("❌ لم يتم إضافة أي استبدالات")
             
-            await event.reply("\n".join(response_parts))
+            # Try to send with premium emojis first
+            try:
+                response_text = "\n".join(response_parts)
+                parsed_text, entities = self.parse_mode.parse(response_text)
+                await self.client.send_message(
+                    event.chat_id,
+                    parsed_text,
+                    formatting_entities=entities
+                )
+            except Exception as parse_error:
+                logger.error(f"Failed to parse premium emojis in reply replacement response: {parse_error}")
+                # Use fallback format
+                fallback_response = "\n".join(fallback_parts)
+                await event.reply(fallback_response)
             
         except Exception as e:
             logger.error(f"Failed to handle reply emoji replacement: {e}")
@@ -1363,26 +1409,49 @@ class TelegramEmojiBot:
                 else:
                     failed_emojis.append(normal_emoji)
 
-            # Prepare response
+            # Prepare response with premium emoji display
             channel_info = self.monitored_channels[channel_id]
             channel_name = channel_info.get('title', 'Unknown Channel')
             
             response_parts = []
+            fallback_parts = []
+            
             if successful_count > 0:
                 emoji_list = ", ".join(normal_emojis[:successful_count])
+                premium_emoji_markdown = f"[💎](emoji/{premium_emoji_id})"
+                
                 response_parts.append(f"✅ تم إضافة {successful_count} استبدال للقناة {channel_name}:")
-                response_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+                response_parts.append(f"• {emoji_list} → {premium_emoji_markdown} (ID: {premium_emoji_id})")
+                
+                fallback_parts.append(f"✅ تم إضافة {successful_count} استبدال للقناة {channel_name}:")
+                fallback_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
 
             if existing_emojis:
                 response_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
+                fallback_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
 
             if failed_emojis:
                 response_parts.append(f"❌ فشل في إضافة: {', '.join(failed_emojis)}")
+                fallback_parts.append(f"❌ فشل في إضافة: {', '.join(failed_emojis)}")
 
             if not response_parts:
                 response_parts.append("❌ لم يتم إضافة أي استبدالات")
+                fallback_parts.append("❌ لم يتم إضافة أي استبدالات")
 
-            await event.reply("\n".join(response_parts))
+            # Try to send with premium emojis first
+            try:
+                response_text = "\n".join(response_parts)
+                parsed_text, entities = self.parse_mode.parse(response_text)
+                await self.client.send_message(
+                    event.chat_id,
+                    parsed_text,
+                    formatting_entities=entities
+                )
+            except Exception as parse_error:
+                logger.error(f"Failed to parse premium emojis in channel replacement response: {parse_error}")
+                # Use fallback format
+                fallback_response = "\n".join(fallback_parts)
+                await event.reply(fallback_response)
 
         except Exception as e:
             logger.error(f"Failed to add channel emoji replacement: {e}")
@@ -1443,27 +1512,50 @@ class TelegramEmojiBot:
                 else:
                     failed_emojis.append(normal_emoji)
             
-            # Prepare response
+            # Prepare response with premium emoji display
             channel_info = self.monitored_channels[channel_id]
             channel_name = channel_info.get('title', 'Unknown Channel')
             
             response_parts = []
+            fallback_parts = []
+            
             if successful_count > 0:
                 successful_emojis = [e for e in normal_emojis if e not in existing_emojis and e not in failed_emojis]
                 emoji_list = ", ".join(successful_emojis[:successful_count])
+                premium_emoji_markdown = f"[💎](emoji/{premium_emoji_id})"
+                
                 response_parts.append(f"✅ تم إضافة {successful_count} استبدال للقناة {channel_name}:")
-                response_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+                response_parts.append(f"• {emoji_list} → {premium_emoji_markdown} (ID: {premium_emoji_id})")
+                
+                fallback_parts.append(f"✅ تم إضافة {successful_count} استبدال للقناة {channel_name}:")
+                fallback_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
 
             if existing_emojis:
                 response_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
+                fallback_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
 
             if failed_emojis:
                 response_parts.append(f"❌ فشل في إضافة: {', '.join(failed_emojis)}")
+                fallback_parts.append(f"❌ فشل في إضافة: {', '.join(failed_emojis)}")
 
             if not response_parts:
                 response_parts.append("❌ لم يتم إضافة أي استبدالات")
+                fallback_parts.append("❌ لم يتم إضافة أي استبدالات")
 
-            await event.reply("\n".join(response_parts))
+            # Try to send with premium emojis first
+            try:
+                response_text = "\n".join(response_parts)
+                parsed_text, entities = self.parse_mode.parse(response_text)
+                await self.client.send_message(
+                    event.chat_id,
+                    parsed_text,
+                    formatting_entities=entities
+                )
+            except Exception as parse_error:
+                logger.error(f"Failed to parse premium emojis in channel reply replacement response: {parse_error}")
+                # Use fallback format
+                fallback_response = "\n".join(fallback_parts)
+                await event.reply(fallback_response)
             
         except Exception as e:
             logger.error(f"Failed to handle reply channel emoji replacement: {e}")
