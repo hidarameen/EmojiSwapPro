@@ -434,40 +434,45 @@ class TelegramEmojiBot:
                         logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
                         
                         # Recreate entity to ensure it's properly formed
-                        if hasattr(entity, 'document_id'):
-                            # Custom emoji entity
-                            copied_entities.append(MessageEntityCustomEmoji(
-                                offset=entity.offset,
-                                length=entity.length,
-                                document_id=entity.document_id
-                            ))
-                        elif hasattr(entity, 'url'):
-                            # Text URL entity
-                            copied_entities.append(type(entity)(
-                                offset=entity.offset,
-                                length=entity.length,
-                                url=entity.url
-                            ))
-                        elif hasattr(entity, 'user_id'):
-                            # Mention entity
-                            copied_entities.append(type(entity)(
-                                offset=entity.offset,
-                                length=entity.length,
-                                user_id=entity.user_id
-                            ))
-                        elif hasattr(entity, 'language'):
-                            # Pre entity with language
-                            copied_entities.append(type(entity)(
-                                offset=entity.offset,
-                                length=entity.length,
-                                language=entity.language
-                            ))
-                        else:
-                            # Basic entity (bold, italic, code, etc.)
-                            copied_entities.append(type(entity)(
-                                offset=entity.offset,
-                                length=entity.length
-                            ))
+                        try:
+                            if hasattr(entity, 'document_id'):
+                                # Custom emoji entity
+                                copied_entities.append(MessageEntityCustomEmoji(
+                                    offset=entity.offset,
+                                    length=entity.length,
+                                    document_id=entity.document_id
+                                ))
+                            elif hasattr(entity, 'url'):
+                                # Text URL entity
+                                copied_entities.append(type(entity)(
+                                    offset=entity.offset,
+                                    length=entity.length,
+                                    url=entity.url
+                                ))
+                            elif hasattr(entity, 'user_id'):
+                                # Mention entity
+                                copied_entities.append(type(entity)(
+                                    offset=entity.offset,
+                                    length=entity.length,
+                                    user_id=entity.user_id
+                                ))
+                            elif hasattr(entity, 'language'):
+                                # Pre entity with language
+                                copied_entities.append(type(entity)(
+                                    offset=entity.offset,
+                                    length=entity.length,
+                                    language=entity.language
+                                ))
+                            else:
+                                # Basic entity (bold, italic, code, etc.)
+                                copied_entities.append(type(entity)(
+                                    offset=entity.offset,
+                                    length=entity.length
+                                ))
+                        except Exception as entity_error:
+                            logger.warning(f"Failed to copy entity {entity_type}: {entity_error}")
+                            # Continue with other entities even if one fails
+                            continue
                     
                     await self.client.send_message(
                         entity=target_channel_id,
@@ -504,40 +509,45 @@ class TelegramEmojiBot:
                         logger.debug(f"  - Caption {entity_type} at offset {entity.offset}, length {entity.length}")
                         
                         # Recreate entity to ensure it's properly formed
-                        if hasattr(entity, 'document_id'):
-                            # Custom emoji entity
-                            copied_entities.append(MessageEntityCustomEmoji(
-                                offset=entity.offset,
-                                length=entity.length,
-                                document_id=entity.document_id
-                            ))
-                        elif hasattr(entity, 'url'):
-                            # Text URL entity
-                            copied_entities.append(type(entity)(
-                                offset=entity.offset,
-                                length=entity.length,
-                                url=entity.url
-                            ))
-                        elif hasattr(entity, 'user_id'):
-                            # Mention entity
-                            copied_entities.append(type(entity)(
-                                offset=entity.offset,
-                                length=entity.length,
-                                user_id=entity.user_id
-                            ))
-                        elif hasattr(entity, 'language'):
-                            # Pre entity with language
-                            copied_entities.append(type(entity)(
-                                offset=entity.offset,
-                                length=entity.length,
-                                language=entity.language
-                            ))
-                        else:
-                            # Basic entity (bold, italic, code, etc.)
-                            copied_entities.append(type(entity)(
-                                offset=entity.offset,
-                                length=entity.length
-                            ))
+                        try:
+                            if hasattr(entity, 'document_id'):
+                                # Custom emoji entity
+                                copied_entities.append(MessageEntityCustomEmoji(
+                                    offset=entity.offset,
+                                    length=entity.length,
+                                    document_id=entity.document_id
+                                ))
+                            elif hasattr(entity, 'url'):
+                                # Text URL entity
+                                copied_entities.append(type(entity)(
+                                    offset=entity.offset,
+                                    length=entity.length,
+                                    url=entity.url
+                                ))
+                            elif hasattr(entity, 'user_id'):
+                                # Mention entity
+                                copied_entities.append(type(entity)(
+                                    offset=entity.offset,
+                                    length=entity.length,
+                                    user_id=entity.user_id
+                                ))
+                            elif hasattr(entity, 'language'):
+                                # Pre entity with language
+                                copied_entities.append(type(entity)(
+                                    offset=entity.offset,
+                                    length=entity.length,
+                                    language=entity.language
+                                ))
+                            else:
+                                # Basic entity (bold, italic, code, etc.)
+                                copied_entities.append(type(entity)(
+                                    offset=entity.offset,
+                                    length=entity.length
+                                ))
+                        except Exception as entity_error:
+                            logger.warning(f"Failed to copy caption entity {entity_type}: {entity_error}")
+                            # Continue with other entities even if one fails
+                            continue
                     
                     await self.client.send_file(
                         entity=target_channel_id,
@@ -581,6 +591,8 @@ class TelegramEmojiBot:
             logger.error(f"Message type: {type(message)}, Has text: {bool(message.text or message.message)}, Has media: {bool(message.media)}")
             if message.entities:
                 logger.error(f"Entities count: {len(message.entities)}")
+                for i, entity in enumerate(message.entities):
+                    logger.error(f"  Entity {i}: {type(entity).__name__} at offset {entity.offset}, length {entity.length}")
 
     async def load_admin_ids(self):
         """Load admin IDs from database into cache"""
@@ -1476,7 +1488,7 @@ class TelegramEmojiBot:
         return unique_emojis
 
     async def replace_emojis_in_message(self, event):
-        """Replace normal emojis with premium emojis in a message"""
+        """Replace normal emojis with premium emojis in a message while preserving all formatting"""
         try:
             message = event.message
             original_text = message.text or message.message
@@ -1512,10 +1524,6 @@ class TelegramEmojiBot:
             
             # Check if any of the found emojis have premium replacements
             replacements_made = []
-            modified_text = original_text
-            
-            # Process text character by character to handle multiple same emojis correctly
-            import re
             
             # Create a list to track which emojis need replacement
             # Priority: Channel-specific replacements first, then global replacements
@@ -1539,61 +1547,102 @@ class TelegramEmojiBot:
             if not emojis_to_replace:
                 return
             
-            # Use regex to replace emojis one by one to avoid conflicts
-            for normal_emoji, premium_emoji_id in emojis_to_replace.items():
-                # Escape special regex characters in emoji
-                escaped_emoji = re.escape(normal_emoji)
-                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_emoji_id})"
-                
-                # Replace all occurrences of this specific emoji
-                modified_text = re.sub(escaped_emoji, premium_emoji_markdown, modified_text)
-            
-            # If replacements were made, edit the message
+            # If replacements were made, edit the message with smart entity handling
             if replacements_made:
                 try:
-                    # Parse the text with custom parse mode to handle premium emojis
-                    try:
-                        parsed_text, new_entities = self.parse_mode.parse(modified_text)
-                    except Exception as parse_error:
-                        logger.error(f"Failed to parse premium emojis in text: {parse_error}")
-                        logger.error(f"Modified text: {modified_text}")
-                        return
-                    
-                    # Merge new premium emoji entities with existing formatting entities
-                    # This preserves bold, italic, and other formatting while adding premium emojis
+                    # Create new custom emoji entities and preserve existing formatting
                     final_entities = []
+                    text_with_replacements = original_text
+                    offset_adjustment = 0
                     
-                    # Add existing non-emoji entities (bold, italic, links, etc.)
-                    if message.entities:
-                        for entity in message.entities:
-                            # Skip existing custom emoji entities as they'll be replaced
-                            if not hasattr(entity, 'document_id'):
-                                final_entities.append(entity)
+                    # Sort existing entities by offset to process them in order
+                    existing_entities = sorted(message.entities or [], key=lambda e: e.offset)
                     
-                    # Add new premium emoji entities
-                    if new_entities:
-                        for entity in new_entities:
-                            # Only add custom emoji entities from the parsed text
-                            if hasattr(entity, 'document_id'):
-                                final_entities.append(entity)
+                    # Find all emoji positions that need replacement
+                    emoji_positions = []
+                    for emoji, premium_id in emojis_to_replace.items():
+                        import re
+                        for match in re.finditer(re.escape(emoji), original_text):
+                            emoji_positions.append({
+                                'start': match.start(),
+                                'end': match.end(),
+                                'emoji': emoji,
+                                'premium_id': premium_id,
+                                'length': len(emoji)
+                            })
                     
-                    # Sort entities by offset to maintain proper order
+                    # Sort emoji positions by start position
+                    emoji_positions.sort(key=lambda x: x['start'])
+                    
+                    # Process each emoji replacement and create custom emoji entities
+                    for emoji_info in emoji_positions:
+                        # Create custom emoji entity at the original position
+                        custom_emoji_entity = MessageEntityCustomEmoji(
+                            offset=emoji_info['start'] + offset_adjustment,
+                            length=emoji_info['length'],
+                            document_id=emoji_info['premium_id']
+                        )
+                        final_entities.append(custom_emoji_entity)
+                    
+                    # Add existing formatting entities (bold, italic, code, etc.) with adjusted offsets if needed
+                    for entity in existing_entities:
+                        # Skip existing custom emoji entities as they'll be replaced
+                        if hasattr(entity, 'document_id'):
+                            continue
+                        
+                        # Copy the entity with the same offset (no adjustment needed since we're not changing text length)
+                        if hasattr(entity, 'url'):
+                            # Text URL entity
+                            new_entity = type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                url=entity.url
+                            )
+                        elif hasattr(entity, 'user_id'):
+                            # Mention entity
+                            new_entity = type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                user_id=entity.user_id
+                            )
+                        elif hasattr(entity, 'language'):
+                            # Pre entity with language
+                            new_entity = type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                language=entity.language
+                            )
+                        else:
+                            # Basic entity (bold, italic, code, strikethrough, underline, etc.)
+                            new_entity = type(entity)(
+                                offset=entity.offset,
+                                length=entity.length
+                            )
+                        
+                        final_entities.append(new_entity)
+                    
+                    # Sort all entities by offset to maintain proper order
                     final_entities.sort(key=lambda e: e.offset)
                     
-                    # Edit the original message with merged entities
+                    # Edit the original message with custom emoji entities and preserved formatting
+                    # The text remains the same, but entities now include custom emojis
                     await self.client.edit_message(
                         event.chat_id,
                         message.id,
-                        parsed_text,
+                        original_text,  # Keep original text unchanged
                         formatting_entities=final_entities,
-                        parse_mode=None  # Use raw entities to preserve everything
+                        parse_mode=None  # Use raw entities to preserve everything exactly
                     )
                     
-                    logger.info(f"Replaced emojis in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
+                    logger.info(f"Replaced {len(emoji_positions)} emoji instances in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
                     
                 except Exception as edit_error:
                     logger.error(f"Failed to edit message {message.id}: {edit_error}")
                     logger.error(f"Final entities count: {len(final_entities) if 'final_entities' in locals() else 'unknown'}")
+                    # Log entity details for debugging
+                    if 'final_entities' in locals():
+                        for i, entity in enumerate(final_entities):
+                            logger.error(f"  Entity {i}: {type(entity).__name__} at offset {entity.offset}, length {entity.length}")
             
         except Exception as e:
             logger.error(f"Failed to replace emojis in message: {e}")
