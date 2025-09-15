@@ -6,5 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "asyncpg>=0.30.0",
     "python-dotenv>=1.1.1",
+    "python-telegram-bot==20.7",
+    "telegram>=0.0.1",
     "telethon>=1.41.2",
 ]
