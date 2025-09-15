@@ -65,6 +65,9 @@ class TelegramEmojiBot:
         self.monitored_channels: Dict[int, Dict[str, str]] = {}
         self.channel_replacement_status: Dict[int, bool] = {}  # Channel replacement activation status
         
+        # Cache for forwarding tasks
+        self.forwarding_tasks: Dict[int, Dict[str, Union[int, bool]]] = {}  # task_id -> {source, target, active}
+        
         # Cache for admin list
         self.admin_ids: set = {6602517122}  # Default admin
         
@@ -80,6 +83,11 @@ class TelegramEmojiBot:
             'تفعيل_استبدال_قناة': 'activate_channel_replacement',
             'تعطيل_استبدال_قناة': 'deactivate_channel_replacement',
             'حالة_استبدال_قناة': 'check_channel_replacement_status',
+            'تعطيل_مهمة_توجيه': 'deactivate_forwarding_task',
+            'تفعيل_مهمة_توجيه': 'activate_forwarding_task',
+            'حذف_مهمة_توجيه': 'delete_forwarding_task',
+            'إضافة_مهمة_توجيه': 'add_forwarding_task',
+            'عرض_مهام_التوجيه': 'list_forwarding_tasks',
             'إضافة_استبدال': 'add_emoji_replacement',
             'عرض_الاستبدالات': 'list_emoji_replacements', 
             'حذف_استبدال': 'delete_emoji_replacement',
@@ -103,6 +111,7 @@ class TelegramEmojiBot:
             await self.load_emoji_mappings()
             await self.load_channel_emoji_mappings()
             await self.load_monitored_channels()
+            await self.load_forwarding_tasks()
             await self.load_admin_ids()
             
         except Exception as e:
@@ -190,6 +199,192 @@ class TelegramEmojiBot:
                 logger.info(f"Replacement active in {active_replacements} channels")
         except Exception as e:
             logger.error(f"Failed to load monitored channels: {e}")
+
+    async def load_forwarding_tasks(self):
+        """Load forwarding tasks from database into cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Create forwarding_tasks table if it doesn't exist
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS forwarding_tasks (
+                        id SERIAL PRIMARY KEY,
+                        source_channel_id BIGINT NOT NULL,
+                        target_channel_id BIGINT NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(source_channel_id, target_channel_id)
+                    )
+                """)
+                
+                rows = await conn.fetch(
+                    "SELECT id, source_channel_id, target_channel_id, is_active, description FROM forwarding_tasks WHERE is_active = TRUE"
+                )
+                
+                self.forwarding_tasks = {}
+                for row in rows:
+                    task_id = row['id']
+                    self.forwarding_tasks[task_id] = {
+                        'source': row['source_channel_id'],
+                        'target': row['target_channel_id'],
+                        'active': row['is_active'],
+                        'description': row['description'] or ''
+                    }
+                
+                logger.info(f"Loaded {len(self.forwarding_tasks)} active forwarding tasks")
+                
+        except Exception as e:
+            logger.error(f"Failed to load forwarding tasks: {e}")
+
+    async def add_forwarding_task(self, source_channel_id: int, target_channel_id: int, description: Optional[str] = None) -> bool:
+        """Add forwarding task to database and cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return False
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Insert new forwarding task
+                task_id = await conn.fetchval(
+                    """INSERT INTO forwarding_tasks (source_channel_id, target_channel_id, description, is_active) 
+                       VALUES ($1, $2, $3, TRUE) 
+                       ON CONFLICT (source_channel_id, target_channel_id) 
+                       DO UPDATE SET is_active = TRUE, description = $3
+                       RETURNING id""",
+                    source_channel_id, target_channel_id, description
+                )
+                
+                # Update cache
+                self.forwarding_tasks[task_id] = {
+                    'source': source_channel_id,
+                    'target': target_channel_id,
+                    'active': True,
+                    'description': description or ''
+                }
+                
+                logger.info(f"Added forwarding task: {source_channel_id} -> {target_channel_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to add forwarding task: {e}")
+            return False
+
+    async def delete_forwarding_task(self, task_id: int) -> bool:
+        """Delete forwarding task from database and cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return False
+        try:
+            async with self.db_pool.acquire() as conn:
+                result = await conn.execute(
+                    "UPDATE forwarding_tasks SET is_active = FALSE WHERE id = $1",
+                    task_id
+                )
+                
+                if result == 'UPDATE 1':
+                    # Update cache
+                    self.forwarding_tasks.pop(task_id, None)
+                    logger.info(f"Deleted forwarding task: {task_id}")
+                    return True
+                else:
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Failed to delete forwarding task: {e}")
+            return False
+
+    async def activate_forwarding_task(self, task_id: int) -> bool:
+        """Activate forwarding task"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return False
+        try:
+            async with self.db_pool.acquire() as conn:
+                result = await conn.execute(
+                    "UPDATE forwarding_tasks SET is_active = TRUE WHERE id = $1",
+                    task_id
+                )
+                
+                if result == 'UPDATE 1':
+                    # Update cache
+                    if task_id in self.forwarding_tasks:
+                        self.forwarding_tasks[task_id]['active'] = True
+                    else:
+                        # Reload from database if not in cache
+                        await self.load_forwarding_tasks()
+                    
+                    logger.info(f"Activated forwarding task: {task_id}")
+                    return True
+                else:
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Failed to activate forwarding task: {e}")
+            return False
+
+    async def deactivate_forwarding_task(self, task_id: int) -> bool:
+        """Deactivate forwarding task"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return False
+        try:
+            async with self.db_pool.acquire() as conn:
+                result = await conn.execute(
+                    "UPDATE forwarding_tasks SET is_active = FALSE WHERE id = $1",
+                    task_id
+                )
+                
+                if result == 'UPDATE 1':
+                    # Update cache
+                    if task_id in self.forwarding_tasks:
+                        self.forwarding_tasks[task_id]['active'] = False
+                    
+                    logger.info(f"Deactivated forwarding task: {task_id}")
+                    return True
+                else:
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Failed to deactivate forwarding task: {e}")
+            return False
+
+    async def forward_message_to_targets(self, source_channel_id: int, message):
+        """Forward message to all target channels for this source"""
+        try:
+            # Find active forwarding tasks for this source channel
+            active_tasks = []
+            for task_id, task_info in self.forwarding_tasks.items():
+                if (task_info['source'] == source_channel_id and 
+                    task_info['active'] and 
+                    task_info['target'] in self.monitored_channels):
+                    active_tasks.append(task_info)
+            
+            if not active_tasks:
+                return
+            
+            logger.info(f"Found {len(active_tasks)} forwarding targets for channel {source_channel_id}")
+            
+            # Forward to each target
+            for task in active_tasks:
+                target_channel_id = task['target']
+                
+                try:
+                    # Forward the message
+                    await self.client.forward_messages(
+                        entity=target_channel_id,
+                        messages=message,
+                        from_peer=source_channel_id
+                    )
+                    
+                    logger.info(f"Forwarded message from {source_channel_id} to {target_channel_id}")
+                    
+                except Exception as forward_error:
+                    logger.error(f"Failed to forward message from {source_channel_id} to {target_channel_id}: {forward_error}")
+            
+        except Exception as e:
+            logger.error(f"Failed to process forwarding for channel {source_channel_id}: {e}")
 
     async def load_admin_ids(self):
         """Load admin IDs from database into cache"""
@@ -2205,6 +2400,201 @@ class TelegramEmojiBot:
             logger.error(f"Failed to check channel replacement status: {e}")
             await event.reply("حدث خطأ أثناء فحص حالة الاستبدال")
 
+    async def cmd_add_forwarding_task(self, event, args: str):
+        """Handle add forwarding task command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: إضافة_مهمة_توجيه <معرف_القناة_المصدر> <معرف_القناة_الهدف> [وصف]")
+                return
+
+            parts = args.strip().split(None, 2)
+            if len(parts) < 2:
+                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_مهمة_توجيه <معرف_القناة_المصدر> <معرف_القناة_الهدف> [وصف]")
+                return
+
+            try:
+                source_channel_id = int(parts[0])
+                target_channel_id = int(parts[1])
+            except ValueError:
+                await event.reply("❌ معرفات القنوات يجب أن تكون أرقاماً")
+                return
+
+            description = parts[2] if len(parts) > 2 else None
+
+            # Check if both channels are monitored
+            if source_channel_id not in self.monitored_channels:
+                await event.reply("❌ القناة المصدر غير مراقبة. أضفها أولاً باستخدام أمر إضافة_قناة")
+                return
+
+            if target_channel_id not in self.monitored_channels:
+                await event.reply("❌ القناة الهدف غير مراقبة. أضفها أولاً باستخدام أمر إضافة_قناة")
+                return
+
+            if source_channel_id == target_channel_id:
+                await event.reply("❌ لا يمكن توجيه الرسائل من القناة إلى نفسها")
+                return
+
+            success = await self.add_forwarding_task(source_channel_id, target_channel_id, description)
+
+            source_name = self.monitored_channels[source_channel_id].get('title', 'Unknown')
+            target_name = self.monitored_channels[target_channel_id].get('title', 'Unknown')
+
+            if success:
+                await event.reply(f"✅ تم إضافة مهمة التوجيه بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+            else:
+                await event.reply("❌ فشل في إضافة مهمة التوجيه")
+
+        except Exception as e:
+            logger.error(f"Failed to add forwarding task: {e}")
+            await event.reply("حدث خطأ أثناء إضافة مهمة التوجيه")
+
+    async def cmd_list_forwarding_tasks(self, event, args: str):
+        """Handle list forwarding tasks command"""
+        try:
+            if not self.forwarding_tasks:
+                await event.reply("لا توجد مهام توجيه محفوظة")
+                return
+
+            response = "📋 قائمة مهام التوجيه:\n\n"
+            
+            for task_id, task_info in self.forwarding_tasks.items():
+                source_id = task_info['source']
+                target_id = task_info['target']
+                is_active = task_info['active']
+                description = task_info['description']
+
+                source_name = self.monitored_channels.get(source_id, {}).get('title', f'القناة {source_id}')
+                target_name = self.monitored_channels.get(target_id, {}).get('title', f'القناة {target_id}')
+
+                status_icon = "✅" if is_active else "❌"
+                status_text = "مُفعلة" if is_active else "مُعطلة"
+
+                response += f"🆔 المهمة: {task_id}\n"
+                response += f"📤 من: {source_name} ({source_id})\n"
+                response += f"📥 إلى: {target_name} ({target_id})\n"
+                response += f"🔄 الحالة: {status_icon} {status_text}\n"
+                
+                if description:
+                    response += f"📝 الوصف: {description}\n"
+                
+                response += "\n"
+
+            await event.reply(response)
+
+        except Exception as e:
+            logger.error(f"Failed to list forwarding tasks: {e}")
+            await event.reply("حدث خطأ أثناء عرض مهام التوجيه")
+
+    async def cmd_delete_forwarding_task(self, event, args: str):
+        """Handle delete forwarding task command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: حذف_مهمة_توجيه <معرف_المهمة>")
+                return
+
+            try:
+                task_id = int(args.strip())
+            except ValueError:
+                await event.reply("❌ معرف المهمة يجب أن يكون رقماً")
+                return
+
+            if task_id not in self.forwarding_tasks:
+                await event.reply("❌ المهمة غير موجودة")
+                return
+
+            task_info = self.forwarding_tasks[task_id]
+            source_name = self.monitored_channels.get(task_info['source'], {}).get('title', 'Unknown')
+            target_name = self.monitored_channels.get(task_info['target'], {}).get('title', 'Unknown')
+
+            success = await self.delete_forwarding_task(task_id)
+
+            if success:
+                await event.reply(f"✅ تم حذف مهمة التوجيه بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+            else:
+                await event.reply("❌ فشل في حذف مهمة التوجيه")
+
+        except Exception as e:
+            logger.error(f"Failed to delete forwarding task: {e}")
+            await event.reply("حدث خطأ أثناء حذف مهمة التوجيه")
+
+    async def cmd_activate_forwarding_task(self, event, args: str):
+        """Handle activate forwarding task command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: تفعيل_مهمة_توجيه <معرف_المهمة>")
+                return
+
+            try:
+                task_id = int(args.strip())
+            except ValueError:
+                await event.reply("❌ معرف المهمة يجب أن يكون رقماً")
+                return
+
+            # Check if task exists (including inactive ones)
+            if self.db_pool is None:
+                await event.reply("❌ قاعدة البيانات غير متاحة")
+                return
+
+            async with self.db_pool.acquire() as conn:
+                task_row = await conn.fetchrow("SELECT * FROM forwarding_tasks WHERE id = $1", task_id)
+                
+                if not task_row:
+                    await event.reply("❌ المهمة غير موجودة")
+                    return
+
+            success = await self.activate_forwarding_task(task_id)
+
+            if success:
+                # Reload cache to get updated task info
+                await self.load_forwarding_tasks()
+                
+                if task_id in self.forwarding_tasks:
+                    task_info = self.forwarding_tasks[task_id]
+                    source_name = self.monitored_channels.get(task_info['source'], {}).get('title', 'Unknown')
+                    target_name = self.monitored_channels.get(task_info['target'], {}).get('title', 'Unknown')
+                    
+                    await event.reply(f"✅ تم تفعيل مهمة التوجيه بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+                else:
+                    await event.reply("✅ تم تفعيل مهمة التوجيه بنجاح!")
+            else:
+                await event.reply("❌ فشل في تفعيل مهمة التوجيه")
+
+        except Exception as e:
+            logger.error(f"Failed to activate forwarding task: {e}")
+            await event.reply("حدث خطأ أثناء تفعيل مهمة التوجيه")
+
+    async def cmd_deactivate_forwarding_task(self, event, args: str):
+        """Handle deactivate forwarding task command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: تعطيل_مهمة_توجيه <معرف_المهمة>")
+                return
+
+            try:
+                task_id = int(args.strip())
+            except ValueError:
+                await event.reply("❌ معرف المهمة يجب أن يكون رقماً")
+                return
+
+            if task_id not in self.forwarding_tasks:
+                await event.reply("❌ المهمة غير موجودة أو معطلة بالفعل")
+                return
+
+            task_info = self.forwarding_tasks[task_id]
+            source_name = self.monitored_channels.get(task_info['source'], {}).get('title', 'Unknown')
+            target_name = self.monitored_channels.get(task_info['target'], {}).get('title', 'Unknown')
+
+            success = await self.deactivate_forwarding_task(task_id)
+
+            if success:
+                await event.reply(f"✅ تم تعطيل مهمة التوجيه بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+            else:
+                await event.reply("❌ فشل في تعطيل مهمة التوجيه")
+
+        except Exception as e:
+            logger.error(f"Failed to deactivate forwarding task: {e}")
+            await event.reply("حدث خطأ أثناء تعطيل مهمة التوجيه")
+
     async def cmd_help_command(self, event, args: str):
         """Handle help command"""
         help_text = """
@@ -2227,6 +2617,13 @@ class TelegramEmojiBot:
 • تعطيل_استبدال_قناة <معرف_القناة> - تعطيل الاستبدال في القناة
 • حالة_استبدال_قناة [معرف_القناة] - فحص حالة الاستبدال
 
+🔄 إدارة مهام التوجيه:
+• إضافة_مهمة_توجيه <معرف_المصدر> <معرف_الهدف> [وصف] - إضافة مهمة توجيه جديدة
+• عرض_مهام_التوجيه - عرض جميع مهام التوجيه
+• حذف_مهمة_توجيه <معرف_المهمة> - حذف مهمة توجيه
+• تفعيل_مهمة_توجيه <معرف_المهمة> - تفعيل مهمة توجيه
+• تعطيل_مهمة_توجيه <معرف_المهمة> - تعطيل مهمة توجيه
+
 📺 إدارة القنوات:
 • إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة
 • عرض_القنوات - عرض القنوات المراقبة
@@ -2247,6 +2644,7 @@ class TelegramEmojiBot:
 - جميع الأوامر تعمل في الرسائل الخاصة فقط
 - الاستبدالات الخاصة بالقناة لها أولوية أعلى من الاستبدالات العامة
 - أوامر الحذف الشامل تتطلب كلمة "تأكيد" لتجنب الحذف الخطأ
+- مهام التوجيه تعمل فقط بين القنوات المراقبة
         """
         await event.reply(help_text.strip())
 
@@ -2370,6 +2768,11 @@ class TelegramEmojiBot:
                 if event_peer_id in self.monitored_channels:
                     message_text = event.message.text or event.message.message or ""
                     logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
+                    
+                    # Handle forwarding first (before emoji replacement)
+                    await self.forward_message_to_targets(event_peer_id, event.message)
+                    
+                    # Then handle emoji replacement
                     await self.replace_emojis_in_message(event)
                     logger.info(f"Finished processing message in channel {event_peer_id}")
                     
