@@ -2918,11 +2918,22 @@ class TelegramEmojiBot:
                     message_text = event.message.text or event.message.message or ""
                     logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
                     
-                    # Handle forwarding first (before emoji replacement)
-                    await self.forward_message_to_targets(event_peer_id, event.message)
-                    
-                    # Then handle emoji replacement
+                    # Handle emoji replacement first
                     await self.replace_emojis_in_message(event)
+                    
+                    # Then handle forwarding (after emoji replacement)
+                    # Get the updated message after emoji replacement
+                    updated_message = event.message
+                    try:
+                        # Try to get the most recent version of the message
+                        updated_message = await self.client.get_messages(event.chat, ids=event.message.id)
+                        if isinstance(updated_message, list) and len(updated_message) > 0:
+                            updated_message = updated_message[0]
+                    except Exception as e:
+                        logger.warning(f"Could not fetch updated message, using original: {e}")
+                        updated_message = event.message
+                    
+                    await self.forward_message_to_targets(event_peer_id, updated_message)
                     logger.info(f"Finished processing message in channel {event_peer_id}")
                     
             except Exception as e:
