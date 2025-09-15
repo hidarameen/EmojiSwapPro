@@ -495,6 +495,56 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to load admin IDs: {e}")
 
+    async def resolve_channel_identifier(self, channel_identifier: str) -> Tuple[Optional[int], Optional[str], Optional[str]]:
+        """
+        Resolve channel identifier (username or ID) to channel_id, username, and title
+        Returns: (channel_id, username, title) or (None, None, None) if not found
+        """
+        try:
+            # If it's a numeric ID, try to convert it
+            if channel_identifier.isdigit() or (channel_identifier.startswith('-') and channel_identifier[1:].isdigit()):
+                channel_id = int(channel_identifier)
+                
+                # Check if it's already in monitored channels
+                if channel_id in self.monitored_channels:
+                    channel_info = self.monitored_channels[channel_id]
+                    return channel_id, channel_info.get('username'), channel_info.get('title')
+                
+                # Try to get entity to verify it exists
+                try:
+                    entity = await self.client.get_entity(channel_id)
+                    if isinstance(entity, Channel):
+                        peer_id = utils.get_peer_id(entity)
+                        return peer_id, getattr(entity, 'username', None), getattr(entity, 'title', 'Unknown Channel')
+                except:
+                    return None, None, None
+            
+            # If it's a username, resolve it
+            else:
+                # Remove @ if present
+                if channel_identifier.startswith('@'):
+                    channel_identifier = channel_identifier[1:]
+                
+                # Check monitored channels by username first
+                for channel_id, channel_info in self.monitored_channels.items():
+                    if channel_info.get('username') == channel_identifier:
+                        return channel_id, channel_info.get('username'), channel_info.get('title')
+                
+                # Try to get entity
+                try:
+                    entity = await self.client.get_entity(channel_identifier)
+                    if isinstance(entity, Channel):
+                        peer_id = utils.get_peer_id(entity)
+                        return peer_id, getattr(entity, 'username', None), getattr(entity, 'title', 'Unknown Channel')
+                except:
+                    return None, None, None
+            
+            return None, None, None
+            
+        except Exception as e:
+            logger.error(f"Failed to resolve channel identifier {channel_identifier}: {e}")
+            return None, None, None
+
     async def format_permissions_text(self, participant, channel_title: str, channel_username: str = None) -> str:
         """Format permissions text for display"""
         try:
@@ -1964,10 +2014,13 @@ class TelegramEmojiBot:
                 # Count replacements
                 replacement_count = len(self.channel_emoji_mappings.get(channel_id, {}))
                 
-                response += f"• {title} (@{username})\n"
-                response += f"  معرف: {channel_id}\n"
-                response += f"  الاستبدال: {status_icon} {status_text}\n"
-                response += f"  الاستبدالات: {replacement_count}\n\n"
+                response += f"• **{title}**\n"
+                response += f"  📋 المعرف الرقمي: `{channel_id}`\n"
+                response += f"  🔗 اسم المستخدم: @{username}\n"
+                response += f"  🔄 الاستبدال: {status_icon} {status_text}\n"
+                response += f"  📝 الاستبدالات: {replacement_count}\n\n"
+            
+            response += "💡 **ملاحظة:** يمكنك استخدام اسم المستخدم (@username) أو المعرف الرقمي في جميع الأوامر"
             
             await event.reply(response)
             
@@ -1979,28 +2032,29 @@ class TelegramEmojiBot:
         """Handle remove channel command"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: حذف_قناة <معرف_القناة>")
+                await event.reply("الاستخدام: حذف_قناة <معرف_القناة_أو_اسم_المستخدم>")
                 return
             
-            try:
-                channel_id = int(args.strip())
-            except ValueError:
-                await event.reply("معرف القناة يجب أن يكون رقماً")
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(args.strip())
+            
+            if channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                 return
             
             if channel_id not in self.monitored_channels:
-                await event.reply("القناة غير موجودة في قائمة المراقبة")
+                await event.reply("❌ القناة غير موجودة في قائمة المراقبة")
                 return
             
             # Get channel info and count of emoji replacements before deletion
             channel_info = self.monitored_channels[channel_id]
-            channel_name = channel_info.get('title', 'Unknown Channel')
+            channel_name = channel_info.get('title', title or 'Unknown Channel')
             emoji_count = len(self.channel_emoji_mappings.get(channel_id, {}))
             
             success = await self.remove_monitored_channel(channel_id)
             
             if success:
-                response = f"✅ تم حذف القناة من المراقبة: {channel_name}"
+                response = f"✅ تم حذف القناة من المراقبة: **{channel_name}**"
                 if emoji_count > 0:
                     response += f"\n🗑️ تم حذف {emoji_count} استبدال إيموجي خاص بالقناة تلقائياً"
                 else:
@@ -2152,10 +2206,11 @@ class TelegramEmojiBot:
                     await event.reply("❌ استخدم: إضافة_استبدال_قناة <معرف_القناة> [وصف]")
                     return
                 
-                try:
-                    channel_id = int(parts[0])
-                except ValueError:
-                    await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                # Resolve channel identifier
+                channel_id, username, title = await self.resolve_channel_identifier(parts[0])
+                
+                if channel_id is None:
+                    await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                     return
                 
                 description = parts[1] if len(parts) > 1 else None
@@ -2166,13 +2221,14 @@ class TelegramEmojiBot:
             first_line_parts = lines[0].split(None, 3)
             
             if len(first_line_parts) < 1:
-                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_استبدال_قناة <معرف_القناة> ...")
+                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_استبدال_قناة <معرف_القناة_أو_اسم_المستخدم> ...")
                 return
 
-            try:
-                channel_id = int(first_line_parts[0])
-            except ValueError:
-                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(first_line_parts[0])
+            
+            if channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             # Check if channel is monitored
@@ -2489,13 +2545,14 @@ class TelegramEmojiBot:
         """Handle list channel-specific emoji replacements command"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: عرض_استبدالات_قناة <معرف_القناة>")
+                await event.reply("الاستخدام: عرض_استبدالات_قناة <معرف_القناة_أو_اسم_المستخدم>")
                 return
 
-            try:
-                channel_id = int(args.strip())
-            except ValueError:
-                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(args.strip())
+            
+            if channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             if channel_id not in self.monitored_channels:
@@ -2503,16 +2560,16 @@ class TelegramEmojiBot:
                 return
 
             channel_info = self.monitored_channels[channel_id]
-            channel_name = channel_info.get('title', 'Unknown Channel')
+            channel_name = channel_info.get('title', title or 'Unknown Channel')
             
             channel_mappings = self.channel_emoji_mappings.get(channel_id, {})
             
             if not channel_mappings:
-                await event.reply(f"لا توجد استبدالات خاصة بالقناة: {channel_name}")
+                await event.reply(f"لا توجد استبدالات خاصة بالقناة: **{channel_name}**")
                 return
 
-            response_parts = [f"📋 استبدالات القناة {channel_name}:\n"]
-            fallback_parts = [f"📋 استبدالات القناة {channel_name}:\n"]
+            response_parts = [f"📋 استبدالات القناة **{channel_name}**:\n"]
+            fallback_parts = [f"📋 استبدالات القناة **{channel_name}**:\n"]
 
             for normal_emoji, premium_id in channel_mappings.items():
                 premium_emoji_markdown = f"[💎](emoji/{premium_id})"
@@ -2536,18 +2593,19 @@ class TelegramEmojiBot:
         """Handle delete channel-specific emoji replacement command"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: حذف_استبدال_قناة <معرف_القناة> <إيموجي>")
+                await event.reply("الاستخدام: حذف_استبدال_قناة <معرف_القناة_أو_اسم_المستخدم> <إيموجي>")
                 return
 
             parts = args.strip().split(None, 1)
             if len(parts) != 2:
-                await event.reply("❌ تنسيق غير صحيح. استخدم: حذف_استبدال_قناة <معرف_القناة> <إيموجي>")
+                await event.reply("❌ تنسيق غير صحيح. استخدم: حذف_استبدال_قناة <معرف_القناة_أو_اسم_المستخدم> <إيموجي>")
                 return
 
-            try:
-                channel_id = int(parts[0])
-            except ValueError:
-                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(parts[0])
+            
+            if channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             normal_emoji = parts[1]
@@ -2559,12 +2617,12 @@ class TelegramEmojiBot:
             success = await self.delete_channel_emoji_replacement(channel_id, normal_emoji)
             
             channel_info = self.monitored_channels[channel_id]
-            channel_name = channel_info.get('title', 'Unknown Channel')
+            channel_name = channel_info.get('title', title or 'Unknown Channel')
 
             if success:
-                await event.reply(f"✅ تم حذف استبدال الإيموجي {normal_emoji} من القناة {channel_name}")
+                await event.reply(f"✅ تم حذف استبدال الإيموجي {normal_emoji} من القناة **{channel_name}**")
             else:
-                await event.reply(f"❌ الإيموجي غير موجود في استبدالات القناة {channel_name}")
+                await event.reply(f"❌ الإيموجي غير موجود في استبدالات القناة **{channel_name}**")
 
         except Exception as e:
             logger.error(f"Failed to delete channel emoji replacement: {e}")
@@ -2574,18 +2632,19 @@ class TelegramEmojiBot:
         """Handle delete all channel-specific emoji replacements command"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: حذف_جميع_استبدالات_قناة <معرف_القناة> تأكيد")
+                await event.reply("الاستخدام: حذف_جميع_استبدالات_قناة <معرف_القناة_أو_اسم_المستخدم> تأكيد")
                 return
 
             parts = args.strip().split()
             if len(parts) < 1:
-                await event.reply("❌ تنسيق غير صحيح. استخدم: حذف_جميع_استبدالات_قناة <معرف_القناة> تأكيد")
+                await event.reply("❌ تنسيق غير صحيح. استخدم: حذف_جميع_استبدالات_قناة <معرف_القناة_أو_اسم_المستخدم> تأكيد")
                 return
 
-            try:
-                channel_id = int(parts[0])
-            except ValueError:
-                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(parts[0])
+            
+            if channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             if channel_id not in self.monitored_channels:
@@ -2593,34 +2652,36 @@ class TelegramEmojiBot:
                 return
 
             channel_info = self.monitored_channels[channel_id]
-            channel_name = channel_info.get('title', 'Unknown Channel')
+            channel_name = channel_info.get('title', title or 'Unknown Channel')
             current_count = len(self.channel_emoji_mappings.get(channel_id, {}))
 
             # Check if user provided confirmation
             if len(parts) < 2 or parts[1].lower() != "تأكيد":
+                # Show both ID and username in the command example
+                channel_display = f"@{username}" if username else str(channel_id)
                 await event.reply(f"""
 ⚠️ تحذير: هذا الأمر سيحذف جميع الاستبدالات الخاصة بالقناة!
 
-📺 القناة: {channel_name}
+📺 القناة: **{channel_name}**
 📊 الاستبدالات الحالية: {current_count} استبدال
 
 🔴 لتأكيد الحذف، أرسل:
-حذف_جميع_استبدالات_قناة {channel_id} تأكيد
+حذف_جميع_استبدالات_قناة {channel_display} تأكيد
 
-💡 يمكنك استخدام "عرض_استبدالات_قناة {channel_id}" لرؤية القائمة قبل الحذف
+💡 يمكنك استخدام "عرض_استبدالات_قناة {channel_display}" لرؤية القائمة قبل الحذف
                 """.strip())
                 return
 
             if current_count == 0:
-                await event.reply(f"لا توجد استبدالات خاصة بالقناة {channel_name} لحذفها")
+                await event.reply(f"لا توجد استبدالات خاصة بالقناة **{channel_name}** لحذفها")
                 return
 
             deleted_count = await self.delete_all_channel_emoji_replacements(channel_id)
 
             if deleted_count > 0:
-                await event.reply(f"✅ تم حذف جميع الاستبدالات الخاصة بالقناة {channel_name} بنجاح!\n🗑️ المحذوف: {deleted_count} استبدال")
+                await event.reply(f"✅ تم حذف جميع الاستبدالات الخاصة بالقناة **{channel_name}** بنجاح!\n🗑️ المحذوف: {deleted_count} استبدال")
             else:
-                await event.reply(f"❌ فشل في حذف استبدالات القناة {channel_name}")
+                await event.reply(f"❌ فشل في حذف استبدالات القناة **{channel_name}**")
 
         except Exception as e:
             logger.error(f"Failed to delete all channel emoji replacements: {e}")
@@ -2630,19 +2691,24 @@ class TelegramEmojiBot:
         """Handle copy emoji replacements from one channel to another"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: نسخ_استبدالات_قناة <معرف_القناة_المصدر> <معرف_القناة_الهدف>")
+                await event.reply("الاستخدام: نسخ_استبدالات_قناة <معرف_القناة_المصدر_أو_اسم_المستخدم> <معرف_القناة_الهدف_أو_اسم_المستخدم>")
                 return
 
             parts = args.strip().split()
             if len(parts) != 2:
-                await event.reply("❌ تنسيق غير صحيح. استخدم: نسخ_استبدالات_قناة <معرف_القناة_المصدر> <معرف_القناة_الهدف>")
+                await event.reply("❌ تنسيق غير صحيح. استخدم: نسخ_استبدالات_قناة <معرف_القناة_المصدر_أو_اسم_المستخدم> <معرف_القناة_الهدف_أو_اسم_المستخدم>")
                 return
 
-            try:
-                source_channel_id = int(parts[0])
-                target_channel_id = int(parts[1])
-            except ValueError:
-                await event.reply("❌ معرفات القنوات يجب أن تكون أرقاماً")
+            # Resolve source channel
+            source_channel_id, source_username, source_title = await self.resolve_channel_identifier(parts[0])
+            if source_channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة المصدر. تأكد من صحة المعرف أو اسم المستخدم")
+                return
+
+            # Resolve target channel
+            target_channel_id, target_username, target_title = await self.resolve_channel_identifier(parts[1])
+            if target_channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة الهدف. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             # Check if both channels are monitored
@@ -2663,19 +2729,20 @@ class TelegramEmojiBot:
             copied_count = 0
             failed_count = 0
 
+            source_display = f"@{source_username}" if source_username else str(source_channel_id)
             for normal_emoji, premium_emoji_id in source_mappings.items():
                 success = await self.add_channel_emoji_replacement(
-                    target_channel_id, normal_emoji, premium_emoji_id, f"نسخ من القناة {source_channel_id}"
+                    target_channel_id, normal_emoji, premium_emoji_id, f"نسخ من القناة {source_display}"
                 )
                 if success:
                     copied_count += 1
                 else:
                     failed_count += 1
 
-            source_name = self.monitored_channels[source_channel_id].get('title', 'Unknown')
-            target_name = self.monitored_channels[target_channel_id].get('title', 'Unknown')
+            source_name = self.monitored_channels[source_channel_id].get('title', source_title or 'Unknown')
+            target_name = self.monitored_channels[target_channel_id].get('title', target_title or 'Unknown')
 
-            response = f"✅ تم نسخ {copied_count} استبدال من {source_name} إلى {target_name}"
+            response = f"✅ تم نسخ {copied_count} استبدال من **{source_name}** إلى **{target_name}**"
             if failed_count > 0:
                 response += f"\n❌ فشل في نسخ {failed_count} استبدال"
 
@@ -2689,13 +2756,14 @@ class TelegramEmojiBot:
         """Handle activate channel replacement command"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: تفعيل_استبدال_قناة <معرف_القناة>")
+                await event.reply("الاستخدام: تفعيل_استبدال_قناة <معرف_القناة_أو_اسم_المستخدم>")
                 return
 
-            try:
-                channel_id = int(args.strip())
-            except ValueError:
-                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(args.strip())
+            
+            if channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             if channel_id not in self.monitored_channels:
@@ -2717,8 +2785,8 @@ class TelegramEmojiBot:
                         # Update cache
                         self.channel_replacement_status[channel_id] = True
                         
-                        channel_name = self.monitored_channels[channel_id].get('title', 'Unknown Channel')
-                        await event.reply(f"✅ تم تفعيل الاستبدال في القناة: {channel_name}")
+                        channel_name = self.monitored_channels[channel_id].get('title', title or 'Unknown Channel')
+                        await event.reply(f"✅ تم تفعيل الاستبدال في القناة: **{channel_name}**")
                         logger.info(f"Activated replacement for channel {channel_id}")
                         return True
                     else:
@@ -2738,13 +2806,14 @@ class TelegramEmojiBot:
         """Handle deactivate channel replacement command"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: تعطيل_استبدال_قناة <معرف_القناة>")
+                await event.reply("الاستخدام: تعطيل_استبدال_قناة <معرف_القناة_أو_اسم_المستخدم>")
                 return
 
-            try:
-                channel_id = int(args.strip())
-            except ValueError:
-                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(args.strip())
+            
+            if channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             if channel_id not in self.monitored_channels:
@@ -2766,8 +2835,8 @@ class TelegramEmojiBot:
                         # Update cache
                         self.channel_replacement_status[channel_id] = False
                         
-                        channel_name = self.monitored_channels[channel_id].get('title', 'Unknown Channel')
-                        await event.reply(f"✅ تم تعطيل الاستبدال في القناة: {channel_name}")
+                        channel_name = self.monitored_channels[channel_id].get('title', title or 'Unknown Channel')
+                        await event.reply(f"✅ تم تعطيل الاستبدال في القناة: **{channel_name}**")
                         logger.info(f"Deactivated replacement for channel {channel_id}")
                         return True
                     else:
@@ -2796,28 +2865,35 @@ class TelegramEmojiBot:
                 
                 for channel_id, channel_info in self.monitored_channels.items():
                     channel_name = channel_info.get('title', 'Unknown Channel')
+                    username = channel_info.get('username', None)
                     is_active = self.channel_replacement_status.get(channel_id, True)
                     status_icon = "✅" if is_active else "❌"
                     status_text = "مُفعل" if is_active else "مُعطل"
                     
-                    response += f"• {channel_name}\n"
-                    response += f"  المعرف: {channel_id}\n"
-                    response += f"  الحالة: {status_icon} {status_text}\n\n"
+                    response += f"• **{channel_name}**\n"
+                    response += f"  📋 المعرف: `{channel_id}`\n"
+                    if username:
+                        response += f"  🔗 اسم المستخدم: @{username}\n"
+                    response += f"  🔄 الحالة: {status_icon} {status_text}\n\n"
 
+                response += "💡 **ملاحظة:** يمكنك فحص قناة محددة باستخدام: حالة_استبدال_قناة <معرف_أو_اسم_مستخدم>"
                 await event.reply(response)
                 return
 
-            try:
-                channel_id = int(args.strip())
-            except ValueError:
-                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(args.strip())
+            
+            if channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             if channel_id not in self.monitored_channels:
                 await event.reply("❌ هذه القناة غير مراقبة")
                 return
 
-            channel_name = self.monitored_channels[channel_id].get('title', 'Unknown Channel')
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', title or 'Unknown Channel')
+            channel_username = channel_info.get('username', username)
             is_active = self.channel_replacement_status.get(channel_id, True)
             status_icon = "✅" if is_active else "❌"
             status_text = "مُفعل" if is_active else "مُعطل"
@@ -2825,8 +2901,10 @@ class TelegramEmojiBot:
             # Count replacements for this channel
             replacement_count = len(self.channel_emoji_mappings.get(channel_id, {}))
             
-            response = f"📊 حالة القناة: {channel_name}\n\n"
-            response += f"🆔 المعرف: {channel_id}\n"
+            response = f"📊 حالة القناة: **{channel_name}**\n\n"
+            response += f"🆔 المعرف الرقمي: `{channel_id}`\n"
+            if channel_username:
+                response += f"🔗 اسم المستخدم: @{channel_username}\n"
             response += f"🔄 حالة الاستبدال: {status_icon} {status_text}\n"
             response += f"📝 عدد الاستبدالات: {replacement_count}\n\n"
             
@@ -2834,7 +2912,8 @@ class TelegramEmojiBot:
                 response += "💡 الاستبدال مُفعل - سيتم استبدال الإيموجيات تلقائياً"
             else:
                 response += "💡 الاستبدال مُعطل - لن يتم استبدال الإيموجيات\n"
-                response += "استخدم 'تفعيل_استبدال_قناة' لتفعيل الاستبدال"
+                channel_display = f"@{channel_username}" if channel_username else str(channel_id)
+                response += f"استخدم 'تفعيل_استبدال_قناة {channel_display}' لتفعيل الاستبدال"
 
             await event.reply(response)
 
@@ -2846,19 +2925,24 @@ class TelegramEmojiBot:
         """Handle add forwarding task command"""
         try:
             if not args.strip():
-                await event.reply("الاستخدام: إضافة_مهمة_توجيه <معرف_القناة_المصدر> <معرف_القناة_الهدف> [التأخير_بالثواني] [وصف]")
+                await event.reply("الاستخدام: إضافة_مهمة_توجيه <معرف_القناة_المصدر_أو_اسم_المستخدم> <معرف_القناة_الهدف_أو_اسم_المستخدم> [التأخير_بالثواني] [وصف]")
                 return
 
             parts = args.strip().split(None, 3)
             if len(parts) < 2:
-                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_مهمة_توجيه <معرف_القناة_المصدر> <معرف_القناة_الهدف> [التأخير_بالثواني] [وصف]")
+                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_مهمة_توجيه <معرف_القناة_المصدر_أو_اسم_المستخدم> <معرف_القناة_الهدف_أو_اسم_المستخدم> [التأخير_بالثواني] [وصف]")
                 return
 
-            try:
-                source_channel_id = int(parts[0])
-                target_channel_id = int(parts[1])
-            except ValueError:
-                await event.reply("❌ معرفات القنوات يجب أن تكون أرقاماً")
+            # Resolve source channel
+            source_channel_id, source_username, source_title = await self.resolve_channel_identifier(parts[0])
+            if source_channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة المصدر. تأكد من صحة المعرف أو اسم المستخدم")
+                return
+
+            # Resolve target channel
+            target_channel_id, target_username, target_title = await self.resolve_channel_identifier(parts[1])
+            if target_channel_id is None:
+                await event.reply("❌ لا يمكن العثور على القناة الهدف. تأكد من صحة المعرف أو اسم المستخدم")
                 return
 
             # Parse delay and description
@@ -2899,11 +2983,11 @@ class TelegramEmojiBot:
 
             success = await self.add_forwarding_task(source_channel_id, target_channel_id, description, delay_seconds)
 
-            source_name = self.monitored_channels[source_channel_id].get('title', 'Unknown')
-            target_name = self.monitored_channels[target_channel_id].get('title', 'Unknown')
+            source_name = self.monitored_channels[source_channel_id].get('title', source_title or 'Unknown')
+            target_name = self.monitored_channels[target_channel_id].get('title', target_title or 'Unknown')
 
             if success:
-                response = f"✅ تم إضافة مهمة النسخ بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}"
+                response = f"✅ تم إضافة مهمة النسخ بنجاح!\n📤 من: **{source_name}**\n📥 إلى: **{target_name}**"
                 if delay_seconds > 0:
                     response += f"\n⏱️ التأخير: {delay_seconds} ثانية"
                 else:
@@ -3229,17 +3313,17 @@ class TelegramEmojiBot:
 • تنظيف_الاستبدالات [تفصيل] - حذف الاستبدالات المكررة
 
 🎯 إدارة الاستبدالات الخاصة بالقنوات:
-• إضافة_استبدال_قناة <معرف_القناة> <إيموجي_عادي> <إيموجي_مميز> [وصف]
-• عرض_استبدالات_قناة <معرف_القناة> - عرض استبدالات قناة معينة
-• حذف_استبدال_قناة <معرف_القناة> <إيموجي> - حذف استبدال من قناة
-• حذف_جميع_استبدالات_قناة <معرف_القناة> تأكيد - حذف جميع استبدالات القناة
-• نسخ_استبدالات_قناة <معرف_المصدر> <معرف_الهدف> - نسخ الاستبدالات
-• تفعيل_استبدال_قناة <معرف_القناة> - تفعيل الاستبدال في القناة
-• تعطيل_استبدال_قناة <معرف_القناة> - تعطيل الاستبدال في القناة
-• حالة_استبدال_قناة [معرف_القناة] - فحص حالة الاستبدال
+• إضافة_استبدال_قناة <معرف_أو_اسم_مستخدم> <إيموجي_عادي> <إيموجي_مميز> [وصف]
+• عرض_استبدالات_قناة <معرف_أو_اسم_مستخدم> - عرض استبدالات قناة معينة
+• حذف_استبدال_قناة <معرف_أو_اسم_مستخدم> <إيموجي> - حذف استبدال من قناة
+• حذف_جميع_استبدالات_قناة <معرف_أو_اسم_مستخدم> تأكيد - حذف جميع استبدالات القناة
+• نسخ_استبدالات_قناة <معرف_أو_اسم_مستخدم_المصدر> <معرف_أو_اسم_مستخدم_الهدف> - نسخ الاستبدالات
+• تفعيل_استبدال_قناة <معرف_أو_اسم_مستخدم> - تفعيل الاستبدال في القناة
+• تعطيل_استبدال_قناة <معرف_أو_اسم_مستخدم> - تعطيل الاستبدال في القناة
+• حالة_استبدال_قناة [معرف_أو_اسم_مستخدم] - فحص حالة الاستبدال
 
 🔄 إدارة مهام النسخ:
-• إضافة_مهمة_توجيه <معرف_المصدر> <معرف_الهدف> [التأخير_بالثواني] [وصف] - إضافة مهمة نسخ جديدة
+• إضافة_مهمة_توجيه <معرف_أو_اسم_مستخدم_المصدر> <معرف_أو_اسم_مستخدم_الهدف> [التأخير_بالثواني] [وصف] - إضافة مهمة نسخ جديدة
 • عرض_مهام_التوجيه - عرض جميع مهام النسخ
 • حذف_مهمة_توجيه <معرف_المهمة> - حذف مهمة نسخ
 • تفعيل_مهمة_توجيه <معرف_المهمة> - تفعيل مهمة نسخ
@@ -3249,8 +3333,8 @@ class TelegramEmojiBot:
 📺 إدارة القنوات:
 • إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة (مع فحص الصلاحيات)
 • عرض_القنوات - عرض القنوات المراقبة
-• حذف_قناة <معرف_القناة> - حذف قناة من المراقبة
-• فحص_صلاحيات_قناة <معرف_القناة> - فحص صلاحيات البوت في القناة
+• حذف_قناة <معرف_أو_اسم_مستخدم> - حذف قناة من المراقبة
+• فحص_صلاحيات_قناة <معرف_أو_اسم_مستخدم> - فحص صلاحيات البوت في القناة
 
 👥 إدارة الأدمن:
 • اضافة_ادمن <معرف_المستخدم> [اسم_المستخدم] - إضافة أدمن جديد
