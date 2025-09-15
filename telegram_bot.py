@@ -355,50 +355,99 @@ class TelegramEmojiBot:
             await event.reply("حدث خطأ أثناء معالجة الأمر.")
 
     async def cmd_add_emoji_replacement(self, event, args: str):
-        """Handle add emoji replacement command"""
+        """Handle add emoji replacement command - supports single or multiple replacements"""
         try:
-            # New format: "😀 🔥 وصف اختياري" where 🔥 is a premium emoji
-            parts = args.split(None, 2)
-            if len(parts) < 2:
-                await event.reply("الاستخدام: إضافة_استبدال <إيموجي_عادي> <إيموجي_مميز> [وصف]")
+            # Check if args contain multiple lines (multiple replacements)
+            lines = args.strip().split('\n')
+            
+            if not args.strip():
+                await event.reply("""
+📋 الاستخدام: إضافة_استبدال
+
+🔸 استبدال واحد:
+إضافة_استبدال <إيموجي_عادي> <إيموجي_مميز> [وصف]
+
+🔸 عدة استبدالات (كل سطر منفصل):
+إضافة_استبدال
+😀 🔥 وصف أول
+❤️ 1234567890 وصف ثاني
+✅ ✨ وصف ثالث
+
+💡 يمكنك استخدام الإيموجي المميز مباشرة أو معرفه الرقمي
+                """.strip())
                 return
             
-            normal_emoji = parts[0]
-            description = parts[2] if len(parts) > 2 else None
-            
-            # Find premium emoji in the message entities
-            premium_emoji_id = None
+            # Get all custom emojis from the message
+            custom_emoji_ids = []
             if event.message.entities:
                 for entity in event.message.entities:
                     if isinstance(entity, MessageEntityCustomEmoji):
-                        premium_emoji_id = entity.document_id
-                        break
+                        custom_emoji_ids.append(entity.document_id)
             
-            # Fallback: try to parse as number (old format support)
-            if premium_emoji_id is None:
+            successful_replacements = []
+            failed_replacements = []
+            custom_emoji_index = 0
+            
+            # Process each line
+            for line_num, line in enumerate(lines, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Parse line: "normal_emoji premium_emoji/id description"
+                parts = line.split(None, 2)
+                if len(parts) < 2:
+                    failed_replacements.append(f"السطر {line_num}: تنسيق غير صحيح")
+                    continue
+                
+                normal_emoji = parts[0]
+                premium_part = parts[1]
+                description = parts[2] if len(parts) > 2 else None
+                
+                # Try to determine premium emoji ID
+                premium_emoji_id = None
+                
+                # Method 1: Try to parse as number (ID format)
                 try:
-                    premium_emoji_id = int(parts[1])
+                    premium_emoji_id = int(premium_part)
                 except ValueError:
-                    await event.reply("""
-❌ لم أجد إيموجي مميز في الرسالة.
-
-📋 طرق الاستخدام:
-1. الطريقة الجديدة (مستحسنة): إضافة_استبدال 😀 🔥 وصف
-   استخدم إيموجي مميز حقيقي بدلاً من 🔥
-
-2. الطريقة القديمة: إضافة_استبدال 😀 1234567890 وصف
-   استخدم معرف الإيموجي الرقمي
-
-💡 استخدم أمر "معرف_ايموجي" لمعرفة معرف أي إيموجي مميز
-                    """.strip())
-                    return
+                    # Method 2: Check if it's a premium emoji in the message
+                    # We need to find which custom emoji corresponds to this position
+                    if custom_emoji_index < len(custom_emoji_ids):
+                        premium_emoji_id = custom_emoji_ids[custom_emoji_index]
+                        custom_emoji_index += 1
+                    else:
+                        # Method 3: If no more custom emojis available, this line fails
+                        failed_replacements.append(f"السطر {line_num}: لم أجد إيموجي مميز أو معرف صحيح")
+                        continue
+                
+                # Add the replacement
+                success = await self.add_emoji_replacement(normal_emoji, premium_emoji_id, description)
+                
+                if success:
+                    successful_replacements.append(f"{normal_emoji} → إيموجي مميز (ID: {premium_emoji_id})")
+                else:
+                    failed_replacements.append(f"السطر {line_num}: فشل في حفظ الاستبدال")
             
-            success = await self.add_emoji_replacement(normal_emoji, premium_emoji_id, description)
+            # Prepare response
+            response_parts = []
             
-            if success:
-                await event.reply(f"✅ تم إضافة استبدال الإيموجي بنجاح!\n{normal_emoji} ← إيموجي مميز (ID: {premium_emoji_id})")
-            else:
-                await event.reply("❌ فشل في إضافة استبدال الإيموجي")
+            if successful_replacements:
+                response_parts.append("✅ تم إضافة الاستبدالات التالية بنجاح:")
+                for replacement in successful_replacements:
+                    response_parts.append(f"• {replacement}")
+            
+            if failed_replacements:
+                if successful_replacements:
+                    response_parts.append("")
+                response_parts.append("❌ فشل في إضافة الاستبدالات التالية:")
+                for failure in failed_replacements:
+                    response_parts.append(f"• {failure}")
+            
+            if not successful_replacements and not failed_replacements:
+                response_parts.append("❌ لم يتم العثور على استبدالات صالحة")
+            
+            await event.reply("\n".join(response_parts))
                 
         except Exception as e:
             logger.error(f"Failed to add emoji replacement: {e}")
