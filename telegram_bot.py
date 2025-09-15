@@ -1573,14 +1573,35 @@ class TelegramEmojiBot:
                 return
                 
             message_text = event.message.text.strip()
-            chat_id = getattr(event, 'chat_id', None)
-            sender_id = getattr(event, 'sender_id', None)
+            
+            # استخدام طرق أكثر موثوقية للحصول على المعلومات
+            chat_id = None
+            sender_id = None
+            
+            if hasattr(event, 'chat_id') and event.chat_id:
+                chat_id = event.chat_id
+            elif hasattr(event, 'message') and hasattr(event.message, 'chat_id'):
+                chat_id = event.message.chat_id
+            elif hasattr(event, 'peer_id'):
+                chat_id = event.peer_id.user_id if hasattr(event.peer_id, 'user_id') else None
+            
+            if hasattr(event, 'sender_id') and event.sender_id:
+                sender_id = event.sender_id
+            elif hasattr(event, 'message') and hasattr(event.message, 'sender_id'):
+                sender_id = event.message.sender_id
+            elif hasattr(event, 'message') and hasattr(event.message, 'from_id'):
+                if hasattr(event.message.from_id, 'user_id'):
+                    sender_id = event.message.from_id.user_id
+            
+            # إذا لم نتمكن من الحصول على sender_id، استخدم chat_id كبديل للرسائل الخاصة
+            if sender_id is None and event.is_private:
+                sender_id = chat_id
             
             if chat_id is None or sender_id is None:
                 logger.warning(f"Private message missing chat_id ({chat_id}) or sender_id ({sender_id}), skipping")
                 return
                 
-            logger.info(f"Handling private message: '{message_text}' from {chat_id}, sender: {sender_id}")
+            logger.info(f"Handling private message: '{message_text}' from chat {chat_id}, sender: {sender_id}")
             
             # Check if sender is authorized (session owner OR admin)
             try:
@@ -4451,35 +4472,20 @@ class TelegramEmojiBot:
                     logger.warning("Received event without message, skipping")
                     return
                 
-                # التحقق من وجود معلومات المرسل والدردشة
+                # Handle private messages with commands FIRST
+                if event.is_private:
+                    # Let handle_private_message do its own validation and authorization
+                    await self.handle_private_message(event)
+                    return
+                
+                # التحقق من وجود معلومات المرسل والدردشة للقنوات المراقبة
                 sender_id = getattr(event, 'sender_id', None)
                 chat_id = getattr(event, 'chat_id', None)
                 
-                if sender_id is None or chat_id is None:
-                    logger.warning(f"Event missing sender_id ({sender_id}) or chat_id ({chat_id}), skipping")
+                # للقنوات المراقبة، نحتاج معرف الدردشة على الأقل
+                if chat_id is None:
+                    logger.warning(f"Channel event missing chat_id, skipping")
                     return
-                
-                # Handle private messages with commands
-                # Check if the message is from the bot owner (session owner) in any private chat
-                if event.is_private:
-                    # Get the bot owner's user ID
-                    try:
-                        me = await self.client.get_me()
-                        bot_owner_id = me.id
-                        
-                        # If the sender is the bot owner, process the command
-                        if sender_id == bot_owner_id:
-                            logger.info(f"Processing command from bot owner in private chat {chat_id}")
-                            await self.handle_private_message(event)
-                            return
-                        # If it's saved messages (chat with self), also process
-                        elif chat_id == bot_owner_id:
-                            logger.info("Processing command in saved messages")
-                            await self.handle_private_message(event)
-                            return
-                    except Exception as e:
-                        logger.error(f"Error checking bot owner: {e}")
-                        return
                 
                 # Check if message is from a monitored channel
                 try:
