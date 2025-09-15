@@ -1473,6 +1473,11 @@ class TelegramEmojiBot:
                         logger.error(f"Modified text: {modified_text}")
                         return
                     
+                    # Check if the parsed text is actually different from original
+                    if parsed_text == original_text:
+                        logger.info(f"Parsed text is identical to original text, skipping edit for message {message.id}")
+                        return
+                    
                     # Merge new premium emoji entities with existing formatting entities
                     # This preserves bold, italic, and other formatting while adding premium emojis
                     final_entities = []
@@ -1494,20 +1499,51 @@ class TelegramEmojiBot:
                     # Sort entities by offset to maintain proper order
                     final_entities.sort(key=lambda e: e.offset)
                     
-                    # Edit the original message with merged entities
-                    await self.client.edit_message(
-                        event.chat_id,
-                        message.id,
-                        parsed_text,
-                        formatting_entities=final_entities,
-                        parse_mode=None  # Use raw entities to preserve everything
-                    )
+                    # Additional check: Compare the final result with current message state
+                    # This prevents "Content of the message was not modified" errors
+                    should_edit = True
                     
-                    logger.info(f"Replaced emojis in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
+                    # If message already has the same text and entities, skip edit
+                    if (parsed_text == original_text and 
+                        message.entities and len(message.entities) == len(final_entities)):
+                        # Compare entities more thoroughly
+                        existing_custom_emojis = []
+                        new_custom_emojis = []
+                        
+                        for entity in message.entities:
+                            if hasattr(entity, 'document_id'):
+                                existing_custom_emojis.append((entity.offset, entity.length, entity.document_id))
+                        
+                        for entity in final_entities:
+                            if hasattr(entity, 'document_id'):
+                                new_custom_emojis.append((entity.offset, entity.length, entity.document_id))
+                        
+                        if existing_custom_emojis == new_custom_emojis:
+                            should_edit = False
+                            logger.info(f"Message {message.id} already has the same content and entities, skipping edit")
+                    
+                    if should_edit:
+                        # Edit the original message with merged entities
+                        await self.client.edit_message(
+                            event.chat_id,
+                            message.id,
+                            parsed_text,
+                            formatting_entities=final_entities,
+                            parse_mode=None  # Use raw entities to preserve everything
+                        )
+                        
+                        logger.info(f"Replaced emojis in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
                     
                 except Exception as edit_error:
-                    logger.error(f"Failed to edit message {message.id}: {edit_error}")
-                    logger.error(f"Final entities count: {len(final_entities) if 'final_entities' in locals() else 'unknown'}")
+                    # Log the specific error but don't treat it as critical since the message forwarding should still work
+                    if "Content of the message was not modified" in str(edit_error):
+                        logger.warning(f"Message {message.id} content was already correct, skipping edit: {edit_error}")
+                    else:
+                        logger.error(f"Failed to edit message {message.id}: {edit_error}")
+                        logger.error(f"Final entities count: {len(final_entities) if 'final_entities' in locals() else 'unknown'}")
+                        logger.error(f"Original text: '{original_text}'")
+                        logger.error(f"Modified text: '{modified_text}'")
+                        logger.error(f"Parsed text: '{parsed_text if 'parsed_text' in locals() else 'unknown'}')")
             
         except Exception as e:
             logger.error(f"Failed to replace emojis in message: {e}")
