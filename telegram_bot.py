@@ -223,8 +223,8 @@ class TelegramEmojiBot:
             return False
 
     def extract_emojis_from_text(self, text: str) -> List[str]:
-        """Extract all unique emojis from text using regex"""
-        # Unicode emoji regex pattern
+        """Extract all unique emojis from text using regex - handles consecutive emojis"""
+        # Unicode emoji regex pattern - removed '+' to match single emoji at a time
         emoji_pattern = re.compile(
             "["
             "\U0001F600-\U0001F64F"  # emoticons
@@ -235,10 +235,10 @@ class TelegramEmojiBot:
             "\U0001F900-\U0001F9FF"  # supplemental symbols
             "\U00002600-\U000026FF"  # miscellaneous symbols
             "\U0001F170-\U0001F251"
-            "]+", flags=re.UNICODE
+            "]", flags=re.UNICODE  # Removed '+' to match individual emojis
         )
         
-        # Get all emojis found in text
+        # Get all individual emojis found in text
         found_emojis = emoji_pattern.findall(text)
         
         # Return unique emojis while preserving order
