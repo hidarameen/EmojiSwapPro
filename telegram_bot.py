@@ -1475,8 +1475,13 @@ class TelegramEmojiBot:
                 escaped_emoji = re.escape(normal_emoji)
                 premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_emoji_id})"
                 
+                # Count occurrences before replacement
+                occurrence_count = len(re.findall(escaped_emoji, modified_text))
+                logger.info(f"Replacing {occurrence_count} occurrences of {normal_emoji} with premium emoji ID {premium_emoji_id}")
+                
                 # Replace all occurrences of this specific emoji
                 modified_text = re.sub(escaped_emoji, premium_emoji_markdown, modified_text)
+                logger.info(f"Text after replacing {normal_emoji}: '{modified_text}'")
             
             # If replacements were made, edit the message
             if replacements_made:
@@ -1484,15 +1489,16 @@ class TelegramEmojiBot:
                     # Parse the text with custom parse mode to handle premium emojis
                     try:
                         parsed_text, new_entities = self.parse_mode.parse(modified_text)
+                        logger.info(f"Original text: '{original_text}'")
+                        logger.info(f"Modified text with markdown: '{modified_text}'")
+                        logger.info(f"Parsed text after parse_mode: '{parsed_text}'")
                     except Exception as parse_error:
                         logger.error(f"Failed to parse premium emojis in text: {parse_error}")
                         logger.error(f"Modified text: {modified_text}")
                         return
                     
-                    # Check if the parsed text is actually different from original
-                    if parsed_text == original_text:
-                        logger.info(f"Parsed text is identical to original text, skipping edit for message {message.id}")
-                        return
+                    # Don't check if parsed text equals original text - we need to proceed with editing
+                    # to apply the premium emoji entities even if the text looks the same
                     
                     # Merge new premium emoji entities with existing formatting entities
                     # This preserves bold, italic, and other formatting while adding premium emojis
@@ -1515,28 +1521,34 @@ class TelegramEmojiBot:
                     # Sort entities by offset to maintain proper order
                     final_entities.sort(key=lambda e: e.offset)
                     
-                    # Additional check: Compare the final result with current message state
-                    # This prevents "Content of the message was not modified" errors
+                    # Check if we actually have new custom emoji entities to add
                     should_edit = True
+                    new_custom_emoji_count = sum(1 for entity in new_entities if hasattr(entity, 'document_id'))
                     
-                    # If message already has the same text and entities, skip edit
-                    if (parsed_text == original_text and 
-                        message.entities and len(message.entities) == len(final_entities)):
-                        # Compare entities more thoroughly
-                        existing_custom_emojis = []
-                        new_custom_emojis = []
-                        
-                        for entity in message.entities:
-                            if hasattr(entity, 'document_id'):
-                                existing_custom_emojis.append((entity.offset, entity.length, entity.document_id))
-                        
-                        for entity in final_entities:
-                            if hasattr(entity, 'document_id'):
-                                new_custom_emojis.append((entity.offset, entity.length, entity.document_id))
-                        
-                        if existing_custom_emojis == new_custom_emojis:
-                            should_edit = False
-                            logger.info(f"Message {message.id} already has the same content and entities, skipping edit")
+                    if new_custom_emoji_count == 0:
+                        should_edit = False
+                        logger.info(f"No new custom emoji entities to add for message {message.id}, skipping edit")
+                    else:
+                        # Compare with existing custom emojis to avoid duplicate edits
+                        if message.entities:
+                            existing_custom_emojis = []
+                            new_custom_emojis = []
+                            
+                            for entity in message.entities:
+                                if hasattr(entity, 'document_id'):
+                                    existing_custom_emojis.append((entity.offset, entity.length, entity.document_id))
+                            
+                            for entity in final_entities:
+                                if hasattr(entity, 'document_id'):
+                                    new_custom_emojis.append((entity.offset, entity.length, entity.document_id))
+                            
+                            if existing_custom_emojis == new_custom_emojis:
+                                should_edit = False
+                                logger.info(f"Message {message.id} already has identical custom emoji entities, skipping edit")
+                            else:
+                                logger.info(f"Message {message.id} has different emoji entities, proceeding with edit")
+                                logger.info(f"Existing: {existing_custom_emojis}")
+                                logger.info(f"New: {new_custom_emojis}")
                     
                     if should_edit:
                         # Edit the original message with merged entities
