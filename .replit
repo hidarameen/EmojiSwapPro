@@ -1,4 +1,4 @@
-modules = ["nodejs-22"]
+modules = ["nodejs-22", "python-3.11", "postgresql-16"]
 
 [agent]
 stack = "AGENT_STACK"
@@ -6,7 +6,7 @@ integrations = ["agentstack-trigger-telegram:1.0.0"]
 
 [nix]
 channel = "stable-24_11"
-packages = ["jq"]
+packages = ["jq", "openssl", "postgresql"]
 
 [deployment]
 build = ["bash", "scripts/build.sh"]
