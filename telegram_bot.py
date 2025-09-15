@@ -1566,18 +1566,32 @@ class TelegramEmojiBot:
     async def handle_private_message(self, event):
         """Handle private messages with Arabic commands and slash commands"""
         try:
+            # التحقق من وجود النص والبيانات الأساسية
+            if not event.message or not event.message.text:
+                logger.warning("Private message without text, skipping")
+                return
+                
             message_text = event.message.text.strip()
-            chat_id = event.chat_id
-            sender_id = event.sender_id
+            chat_id = getattr(event, 'chat_id', None)
+            sender_id = getattr(event, 'sender_id', None)
+            
+            if chat_id is None or sender_id is None:
+                logger.warning(f"Private message missing chat_id ({chat_id}) or sender_id ({sender_id}), skipping")
+                return
+                
             logger.info(f"Handling private message: '{message_text}' from {chat_id}, sender: {sender_id}")
             
             # Get the bot owner's user ID (session owner)
-            me = await self.client.get_me()
-            bot_owner_id = me.id
-            
-            # Check if sender is the bot owner (session owner) - silently ignore if not
-            if sender_id != bot_owner_id:
-                logger.info(f"Message from user {sender_id} but bot owner is {bot_owner_id} - ignoring silently")
+            try:
+                me = await self.client.get_me()
+                bot_owner_id = me.id
+                
+                # Check if sender is the bot owner (session owner) - silently ignore if not
+                if sender_id != bot_owner_id:
+                    logger.info(f"Message from user {sender_id} but bot owner is {bot_owner_id} - ignoring silently")
+                    return
+            except Exception as e:
+                logger.error(f"Error getting bot owner info: {e}")
                 return
             
             # Handle slash command menu request
@@ -4423,47 +4437,67 @@ class TelegramEmojiBot:
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
             try:
+                # التحقق من وجود البيانات الأساسية
+                if not event or not event.message:
+                    logger.warning("Received event without message, skipping")
+                    return
+                
+                # التحقق من وجود معلومات المرسل والدردشة
+                sender_id = getattr(event, 'sender_id', None)
+                chat_id = getattr(event, 'chat_id', None)
+                
+                if sender_id is None or chat_id is None:
+                    logger.warning(f"Event missing sender_id ({sender_id}) or chat_id ({chat_id}), skipping")
+                    return
+                
                 # Handle private messages with commands
                 # Check if the message is from the bot owner (session owner) in any private chat
                 if event.is_private:
                     # Get the bot owner's user ID
-                    me = await self.client.get_me()
-                    bot_owner_id = me.id
-                    
-                    # If the sender is the bot owner, process the command
-                    if event.sender_id == bot_owner_id:
-                        logger.info(f"Processing command from bot owner in private chat {event.chat_id}")
-                        await self.handle_private_message(event)
-                        return
-                    # If it's saved messages (chat with self), also process
-                    elif event.chat_id == bot_owner_id:
-                        logger.info("Processing command in saved messages")
-                        await self.handle_private_message(event)
+                    try:
+                        me = await self.client.get_me()
+                        bot_owner_id = me.id
+                        
+                        # If the sender is the bot owner, process the command
+                        if sender_id == bot_owner_id:
+                            logger.info(f"Processing command from bot owner in private chat {chat_id}")
+                            await self.handle_private_message(event)
+                            return
+                        # If it's saved messages (chat with self), also process
+                        elif chat_id == bot_owner_id:
+                            logger.info("Processing command in saved messages")
+                            await self.handle_private_message(event)
+                            return
+                    except Exception as e:
+                        logger.error(f"Error checking bot owner: {e}")
                         return
                 
-                # Check if message is from a monitored channel  
-                event_peer_id = utils.get_peer_id(event.chat)
-                if event_peer_id in self.monitored_channels:
-                    message_text = event.message.text or event.message.message or ""
-                    logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
-                    
-                    # Handle emoji replacement first (only for original messages in source channels)
-                    await self.replace_emojis_in_message(event)
-                    
-                    # Then handle forwarding (after emoji replacement)
-                    # Get the updated message after emoji replacement
-                    updated_message = event.message
-                    try:
-                        # Try to get the most recent version of the message
-                        updated_message = await self.client.get_messages(event.chat, ids=event.message.id)
-                        if isinstance(updated_message, list) and len(updated_message) > 0:
-                            updated_message = updated_message[0]
-                    except Exception as e:
-                        logger.warning(f"Could not fetch updated message, using original: {e}")
+                # Check if message is from a monitored channel
+                try:
+                    event_peer_id = utils.get_peer_id(event.chat)
+                    if event_peer_id and event_peer_id in self.monitored_channels:
+                        message_text = event.message.text or event.message.message or ""
+                        logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
+                        
+                        # Handle emoji replacement first (only for original messages in source channels)
+                        await self.replace_emojis_in_message(event)
+                        
+                        # Then handle forwarding (after emoji replacement)
+                        # Get the updated message after emoji replacement
                         updated_message = event.message
-                    
-                    await self.forward_message_to_targets(event_peer_id, updated_message)
-                    logger.info(f"Finished processing message in channel {event_peer_id}")
+                        try:
+                            # Try to get the most recent version of the message
+                            updated_message = await self.client.get_messages(event.chat, ids=event.message.id)
+                            if isinstance(updated_message, list) and len(updated_message) > 0:
+                                updated_message = updated_message[0]
+                        except Exception as e:
+                            logger.warning(f"Could not fetch updated message, using original: {e}")
+                            updated_message = event.message
+                        
+                        await self.forward_message_to_targets(event_peer_id, updated_message)
+                        logger.info(f"Finished processing message in channel {event_peer_id}")
+                except Exception as e:
+                    logger.error(f"Error processing channel message: {e}")
                     
             except Exception as e:
                 logger.error(f"Error in new message handler: {e}")
