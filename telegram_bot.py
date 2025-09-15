@@ -501,13 +501,18 @@ class TelegramEmojiBot:
             message = event.message
             original_text = message.text or message.message
             
+            logger.info(f"Attempting to replace emojis in message: '{original_text}'")
+            
             if not original_text:
+                logger.info("No text in message, skipping emoji replacement")
                 return
             
             # Extract emojis from the message
             found_emojis = self.extract_emojis_from_text(original_text)
+            logger.info(f"Found emojis in text: {found_emojis}")
             
             if not found_emojis:
+                logger.info("No emojis found in message text")
                 return
             
             # Check if any of the found emojis have premium replacements
@@ -528,10 +533,14 @@ class TelegramEmojiBot:
                     emoji in self.channel_emoji_mappings[event_peer_id]):
                     emojis_to_replace[emoji] = self.channel_emoji_mappings[event_peer_id][emoji]
                     replacements_made.append(emoji)
+                    logger.info(f"Found channel-specific replacement for {emoji}: {self.channel_emoji_mappings[event_peer_id][emoji]}")
                 # Then check global replacements
                 elif emoji in self.emoji_mappings:
                     emojis_to_replace[emoji] = self.emoji_mappings[emoji]
                     replacements_made.append(emoji)
+                    logger.info(f"Found global replacement for {emoji}: {self.emoji_mappings[emoji]}")
+                else:
+                    logger.info(f"No replacement found for emoji: {emoji}")
             
             if not emojis_to_replace:
                 return
@@ -1755,9 +1764,6 @@ class TelegramEmojiBot:
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
             try:
-                # Log for debugging
-                logger.info(f"Message: is_private={event.is_private}, out={event.message.out}, chat_id={event.chat_id}, sender_id={event.sender_id}")
-                
                 # Handle private messages with commands
                 # Include saved messages (messages to self) where sender_id equals chat_id
                 if event.is_private and (not event.message.out or event.sender_id == event.chat_id):
@@ -1768,8 +1774,10 @@ class TelegramEmojiBot:
                 # Check if message is from a monitored channel  
                 event_peer_id = utils.get_peer_id(event.chat)
                 if event_peer_id in self.monitored_channels:
-                    logger.info(f"New message in monitored channel {event_peer_id}")
+                    message_text = event.message.text or event.message.message or ""
+                    logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
                     await self.replace_emojis_in_message(event)
+                    logger.info(f"Finished processing message in channel {event_peer_id}")
                     
             except Exception as e:
                 logger.error(f"Error in new message handler: {e}")
