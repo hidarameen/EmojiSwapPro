@@ -22,9 +22,15 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
 
-# Replace these with your actual values from https://my.telegram.org/apps
-API_ID = 12345  # Replace with your actual API ID
-API_HASH = 'your_api_hash_here'  # Replace with your actual API hash
+# Load environment variables
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Get API credentials from environment variables
+API_ID = int(os.getenv('API_ID', '0'))
+API_HASH = os.getenv('API_HASH', '')
 
 async def generate_session_string():
     """Generate and return a session string"""
@@ -33,13 +39,14 @@ async def generate_session_string():
     print("=" * 40)
     
     # Validate API credentials
-    if API_ID == 12345 or API_HASH == 'your_api_hash_here':
-        print("❌ Error: Please update API_ID and API_HASH with your actual values")
+    if not API_ID or API_ID == 0 or not API_HASH:
+        print("❌ Error: Missing API_ID or API_HASH environment variables")
         print("   Get them from: https://my.telegram.org/apps")
+        print("   Set them in your .env file or environment")
         return None
     
-    # Create client
-    client = TelegramClient('temp_session', API_ID, API_HASH)
+    # Create client with StringSession for proper session string generation
+    client = TelegramClient(StringSession(), API_ID, API_HASH)
     
     try:
         print("🔌 Connecting to Telegram...")
@@ -102,12 +109,7 @@ async def generate_session_string():
         except Exception as e:
             print(f"Warning: Failed to disconnect client: {e}")
         
-        # Clean up temporary session file
-        import os
-        try:
-            os.remove('temp_session.session')
-        except:
-            pass
+        # No cleanup needed for StringSession
 
 def main():
     """Main function"""
