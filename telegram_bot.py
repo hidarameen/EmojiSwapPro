@@ -1436,15 +1436,18 @@ class TelegramEmojiBot:
 
             else:
                 # Multi-line format: معرف_القناة followed by multiple lines of replacements
-                # Skip the first line if it only contains channel ID
-                if len(first_line_parts) == 1:
-                    replacement_lines = lines[1:]
+                replacement_lines = []
+                
+                # Check if first line contains both channel ID and first replacement
+                if len(first_line_parts) >= 3:
+                    # First line has: channel_id emoji1 emoji2 [description]
+                    first_replacement = ' '.join(first_line_parts[1:])
+                    replacement_lines.append(first_replacement)
+                    # Add remaining lines
+                    replacement_lines.extend(lines[1:])
                 else:
-                    # First line contains channel ID + first replacement
-                    replacement_lines = lines
-                    # Process first line as replacement if it has enough parts
-                    if len(first_line_parts) >= 3:
-                        replacement_lines[0] = ' '.join(first_line_parts[1:])
+                    # First line only has channel ID, use remaining lines
+                    replacement_lines = lines[1:]
 
                 # Process each replacement line
                 for line_num, line in enumerate(replacement_lines, 1):
