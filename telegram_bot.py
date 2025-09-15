@@ -68,6 +68,7 @@ class TelegramEmojiBot:
             'إضافة_استبدال': 'add_emoji_replacement',
             'عرض_الاستبدالات': 'list_emoji_replacements', 
             'حذف_استبدال': 'delete_emoji_replacement',
+            'تنظيف_الاستبدالات': 'clean_duplicate_replacements',
             'إضافة_قناة': 'add_channel',
             'عرض_القنوات': 'list_channels',
             'حذف_قناة': 'remove_channel',
@@ -513,6 +514,79 @@ class TelegramEmojiBot:
             logger.error(f"Failed to delete emoji replacement: {e}")
             await event.reply("حدث خطأ أثناء حذف استبدال الإيموجي")
 
+    async def cmd_clean_duplicate_replacements(self, event, args: str):
+        """Clean duplicate emoji replacements and show detailed analysis"""
+        try:
+            if self.db_pool is None:
+                await event.reply("❌ قاعدة البيانات غير متاحة")
+                return
+            
+            async with self.db_pool.acquire() as conn:
+                # Get all replacements with their creation times
+                rows = await conn.fetch("""
+                    SELECT normal_emoji, premium_emoji_id, description, created_at 
+                    FROM emoji_replacements 
+                    ORDER BY normal_emoji, created_at DESC
+                """)
+                
+                if not rows:
+                    await event.reply("❌ لا توجد استبدالات في قاعدة البيانات")
+                    return
+                
+                # Group by emoji and find duplicates
+                emoji_groups = {}
+                for row in rows:
+                    emoji = row['normal_emoji']
+                    if emoji not in emoji_groups:
+                        emoji_groups[emoji] = []
+                    emoji_groups[emoji].append(row)
+                
+                # Find duplicates and clean them
+                cleaned_count = 0
+                duplicate_report = []
+                
+                for emoji, entries in emoji_groups.items():
+                    if len(entries) > 1:
+                        # Keep the most recent (first in DESC order)
+                        keep_entry = entries[0]
+                        delete_entries = entries[1:]
+                        
+                        duplicate_report.append(f"🔄 {emoji}:")
+                        duplicate_report.append(f"   ✅ احتفظ بـ: ID {keep_entry['premium_emoji_id']} ({keep_entry['created_at']})")
+                        
+                        # Delete older duplicates
+                        for old_entry in delete_entries:
+                            await conn.execute(
+                                "DELETE FROM emoji_replacements WHERE normal_emoji = $1 AND premium_emoji_id = $2 AND created_at = $3",
+                                old_entry['normal_emoji'], old_entry['premium_emoji_id'], old_entry['created_at']
+                            )
+                            duplicate_report.append(f"   ❌ حذف: ID {old_entry['premium_emoji_id']} ({old_entry['created_at']})")
+                            cleaned_count += 1
+                
+                # Reload cache after cleaning
+                await self.load_emoji_mappings()
+                
+                # Prepare response
+                if cleaned_count > 0:
+                    response = f"🧹 تم تنظيف {cleaned_count} استبدال مكرر:\n\n"
+                    response += "\n".join(duplicate_report)
+                    response += f"\n\n✅ تم إعادة تحميل {len(self.emoji_mappings)} استبدال نشط"
+                else:
+                    response = "✅ لا توجد استبدالات مكررة. قاعدة البيانات نظيفة!"
+                    
+                    # Show current mappings summary
+                    response += f"\n\n📊 الاستبدالات الحالية: {len(self.emoji_mappings)}"
+                    if args.strip().lower() == "تفصيل":
+                        response += "\n\n📋 التفاصيل:"
+                        for emoji, emoji_id in self.emoji_mappings.items():
+                            response += f"\n• {emoji} → ID: {emoji_id}"
+                
+                await event.reply(response)
+                
+        except Exception as e:
+            logger.error(f"Failed to clean duplicate replacements: {e}")
+            await event.reply("❌ حدث خطأ أثناء تنظيف الاستبدالات المكررة")
+
     async def cmd_add_channel(self, event, args: str):
         """Handle add channel command"""
         try:
@@ -604,6 +678,7 @@ class TelegramEmojiBot:
 • إضافة_استبدال <إيموجي_عادي> <إيموجي_مميز> [وصف]
 • عرض_الاستبدالات - عرض جميع الاستبدالات
 • حذف_استبدال <إيموجي> - حذف استبدال
+• تنظيف_الاستبدالات [تفصيل] - حذف الاستبدالات المكررة
 
 📺 إدارة القنوات:
 • إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة
