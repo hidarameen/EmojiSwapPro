@@ -746,11 +746,33 @@ class TelegramEmojiBot:
                             custom_emojis.append(entity.document_id)
                     
                     if custom_emojis:
-                        response = "🔍 معرفات الإيموجي المميز في الرسالة:\n\n"
+                        # Build response with actual premium emojis
+                        response_parts = ["🔍 معرفات الإيموجي المميز في الرسالة:\n"]
+                        
                         for idx, emoji_id in enumerate(custom_emojis, 1):
-                            response += f"• الإيموجي {idx}: `{emoji_id}`\n"
-                        response += "\nيمكنك نسخ المعرف واستخدامه مع أمر إضافة_استبدال"
-                        await event.reply(response)
+                            # Create markdown for premium emoji with a placeholder emoji
+                            premium_emoji_markdown = f"[💎](emoji/{emoji_id})"
+                            response_parts.append(f"• {premium_emoji_markdown} `{emoji_id}`")
+                        
+                        response_parts.append("\nيمكنك نسخ المعرف واستخدامه مع أمر إضافة_استبدال")
+                        response_text = "\n".join(response_parts)
+                        
+                        # Parse and send with premium emojis
+                        try:
+                            parsed_text, entities = self.parse_mode.parse(response_text)
+                            await self.client.send_message(
+                                event.chat_id,
+                                parsed_text,
+                                formatting_entities=entities
+                            )
+                        except Exception as parse_error:
+                            logger.error(f"Failed to parse premium emojis in get_emoji_id: {parse_error}")
+                            # Fallback to simple text
+                            simple_response = "🔍 معرفات الإيموجي المميز في الرسالة:\n\n"
+                            for idx, emoji_id in enumerate(custom_emojis, 1):
+                                simple_response += f"• إيموجي مميز: `{emoji_id}`\n"
+                            simple_response += "\nيمكنك نسخ المعرف واستخدامه مع أمر إضافة_استبدال"
+                            await event.reply(simple_response)
                         return
                     else:
                         await event.reply("❌ الرسالة المردود عليها لا تحتوي على إيموجي مميز")
@@ -767,11 +789,33 @@ class TelegramEmojiBot:
                         custom_emojis.append(entity.document_id)
                 
                 if custom_emojis:
-                    response = "🔍 معرفات الإيموجي المميز في رسالتك:\n\n"
+                    # Build response with actual premium emojis
+                    response_parts = ["🔍 معرفات الإيموجي المميز في رسالتك:\n"]
+                    
                     for idx, emoji_id in enumerate(custom_emojis, 1):
-                        response += f"• الإيموجي {idx}: `{emoji_id}`\n"
-                    response += "\nيمكنك نسخ المعرف واستخدامه مع أمر إضافة_استبدال"
-                    await event.reply(response)
+                        # Create markdown for premium emoji with a placeholder emoji
+                        premium_emoji_markdown = f"[💎](emoji/{emoji_id})"
+                        response_parts.append(f"• {premium_emoji_markdown} `{emoji_id}`")
+                    
+                    response_parts.append("\nيمكنك نسخ المعرف واستخدامه مع أمر إضافة_استبدال")
+                    response_text = "\n".join(response_parts)
+                    
+                    # Parse and send with premium emojis
+                    try:
+                        parsed_text, entities = self.parse_mode.parse(response_text)
+                        await self.client.send_message(
+                            event.chat_id,
+                            parsed_text,
+                            formatting_entities=entities
+                        )
+                    except Exception as parse_error:
+                        logger.error(f"Failed to parse premium emojis in get_emoji_id: {parse_error}")
+                        # Fallback to simple text
+                        simple_response = "🔍 معرفات الإيموجي المميز في رسالتك:\n\n"
+                        for idx, emoji_id in enumerate(custom_emojis, 1):
+                            simple_response += f"• إيموجي مميز: `{emoji_id}`\n"
+                        simple_response += "\nيمكنك نسخ المعرف واستخدامه مع أمر إضافة_استبدال"
+                        await event.reply(simple_response)
                     return
             
             # No custom emojis found
