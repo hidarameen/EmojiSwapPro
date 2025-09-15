@@ -3117,7 +3117,7 @@ class TelegramEmojiBot:
             if len(parts) >= 3:
                 try:
                     # Try to parse third parameter as delay
-                    delay_seconds = int(parts[2])
+                    delay_seconds = int(parts[2                )
                     if delay_seconds < 0:
                         await event.reply("❌ التأخير يجب أن يكون رقماً موجباً أو صفر")
                         return
