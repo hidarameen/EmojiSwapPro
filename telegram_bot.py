@@ -1553,7 +1553,6 @@ class TelegramEmojiBot:
                     # Create new custom emoji entities and preserve existing formatting
                     final_entities = []
                     text_with_replacements = original_text
-                    offset_adjustment = 0
                     
                     # Sort existing entities by offset to process them in order
                     existing_entities = sorted(message.entities or [], key=lambda e: e.offset)
@@ -1574,23 +1573,49 @@ class TelegramEmojiBot:
                     # Sort emoji positions by start position
                     emoji_positions.sort(key=lambda x: x['start'])
                     
-                    # Process each emoji replacement and create custom emoji entities
+                    # Check for conflicts between emoji positions and code/pre formatting
+                    safe_emoji_positions = []
                     for emoji_info in emoji_positions:
+                        is_safe = True
+                        for entity in existing_entities:
+                            # Check if emoji is inside code, pre, or other formatting that might conflict
+                            if hasattr(entity, 'offset') and hasattr(entity, 'length'):
+                                entity_start = entity.offset
+                                entity_end = entity.offset + entity.length
+                                emoji_start = emoji_info['start']
+                                emoji_end = emoji_info['end']
+                                
+                                # Check if emoji overlaps with code/pre formatting
+                                if (isinstance(entity, (type(message.entities[0]) if message.entities else type(None))) and
+                                    hasattr(entity, '__class__') and
+                                    entity.__class__.__name__ in ['MessageEntityCode', 'MessageEntityPre']):
+                                    
+                                    # If emoji is inside code/pre formatting, skip replacement
+                                    if (emoji_start >= entity_start and emoji_end <= entity_end):
+                                        logger.info(f"Skipping emoji replacement for {emoji_info['emoji']} as it's inside code formatting")
+                                        is_safe = False
+                                        break
+                        
+                        if is_safe:
+                            safe_emoji_positions.append(emoji_info)
+                    
+                    # Process each safe emoji replacement and create custom emoji entities
+                    for emoji_info in safe_emoji_positions:
                         # Create custom emoji entity at the original position
                         custom_emoji_entity = MessageEntityCustomEmoji(
-                            offset=emoji_info['start'] + offset_adjustment,
+                            offset=emoji_info['start'],
                             length=emoji_info['length'],
                             document_id=emoji_info['premium_id']
                         )
                         final_entities.append(custom_emoji_entity)
                     
-                    # Add existing formatting entities (bold, italic, code, etc.) with adjusted offsets if needed
+                    # Add existing formatting entities (bold, italic, code, etc.)
                     for entity in existing_entities:
                         # Skip existing custom emoji entities as they'll be replaced
                         if hasattr(entity, 'document_id'):
                             continue
                         
-                        # Copy the entity with the same offset (no adjustment needed since we're not changing text length)
+                        # Copy the entity exactly as is
                         if hasattr(entity, 'url'):
                             # Text URL entity
                             new_entity = type(entity)(
@@ -1624,17 +1649,21 @@ class TelegramEmojiBot:
                     # Sort all entities by offset to maintain proper order
                     final_entities.sort(key=lambda e: e.offset)
                     
-                    # Edit the original message with custom emoji entities and preserved formatting
-                    # The text remains the same, but entities now include custom emojis
-                    await self.client.edit_message(
-                        event.chat_id,
-                        message.id,
-                        original_text,  # Keep original text unchanged
-                        formatting_entities=final_entities,
-                        parse_mode=None  # Use raw entities to preserve everything exactly
-                    )
-                    
-                    logger.info(f"Replaced {len(emoji_positions)} emoji instances in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
+                    # Only proceed if we have emoji replacements that are safe to make
+                    if safe_emoji_positions:
+                        # Edit the original message with custom emoji entities and preserved formatting
+                        # The text remains the same, but entities now include custom emojis
+                        await self.client.edit_message(
+                            event.chat_id,
+                            message.id,
+                            original_text,  # Keep original text unchanged
+                            formatting_entities=final_entities,
+                            parse_mode=None  # Use raw entities to preserve everything exactly
+                        )
+                        
+                        logger.info(f"Replaced {len(safe_emoji_positions)} emoji instances in message {message.id} while preserving {len(final_entities)} total formatting entities (skipped {len(emoji_positions) - len(safe_emoji_positions)} emojis in code formatting)")
+                    else:
+                        logger.info(f"All {len(emoji_positions)} emoji instances are inside code formatting, skipping replacement")
                     
                 except Exception as edit_error:
                     logger.error(f"Failed to edit message {message.id}: {edit_error}")
