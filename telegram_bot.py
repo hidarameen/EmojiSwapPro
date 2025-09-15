@@ -548,142 +548,105 @@ class TelegramEmojiBot:
                     logger.info("Copying media file directly using send_file with message.media")
                     logger.info(f"Media object type: {type(message.media).__name__}")
                     
-                    # Check if the caption contains markdown-style formatting that needs to be converted
-                    needs_markdown_parse = False
-                    if caption and ('**' in caption or '__' in caption or 
-                        '~~' in caption or '`' in caption or
-                        '[' in caption and '](' in caption):
-                        needs_markdown_parse = True
+                    # For media messages, always ensure we send the file WITH caption (if any)
+                    # Use a more robust approach to handle media with captions
                     
-                    # Preserve caption entities exactly as they are
-                    if message.entities and caption:
-                        # Log caption entities being preserved
-                        logger.debug(f"Preserving {len(message.entities)} caption entities")
-                        premium_emoji_count = 0
-                        for entity in message.entities:
-                            entity_type = type(entity).__name__
-                            if isinstance(entity, MessageEntityCustomEmoji):
-                                premium_emoji_count += 1
-                                logger.debug(f"  - Caption Premium Emoji: {entity_type} at offset {entity.offset}, length {entity.length}, ID: {entity.document_id}")
-                            else:
-                                logger.debug(f"  - Caption {entity_type} at offset {entity.offset}, length {entity.length}")
+                    try:
+                        # Primary method: Send file with all caption formatting preserved
+                        send_file_kwargs = {
+                            'entity': target_channel_id,
+                            'file': message.media,
+                            'supports_streaming': True,
+                            'force_document': False,  # Keep original media type
+                            'parse_mode': None  # Use raw entities
+                        }
                         
-                        logger.info(f"Copying media with caption containing {premium_emoji_count} premium emojis and {len(message.entities) - premium_emoji_count} other formatting entities")
-                        
-                        # If the caption still contains markdown syntax, parse it to get proper entities
-                        if needs_markdown_parse:
-                            try:
-                                # Parse the caption with markdown to get proper formatting entities
-                                parsed_caption, parsed_entities = self.parse_mode.parse(caption)
-                                
-                                # Merge existing custom emoji entities with new formatting entities
-                                final_entities = []
-                                
-                                # Add custom emoji entities from the original message
-                                for entity in message.entities:
-                                    if isinstance(entity, MessageEntityCustomEmoji):
-                                        final_entities.append(entity)
-                                
-                                # Add formatting entities from markdown parsing (but skip custom emojis to avoid duplicates)
-                                for entity in parsed_entities:
-                                    if not isinstance(entity, MessageEntityCustomEmoji):
-                                        final_entities.append(entity)
-                                
-                                # Sort entities by offset to maintain proper order
-                                final_entities.sort(key=lambda e: e.offset)
-                                
-                                logger.info(f"Parsed caption markdown and merged entities: {len(final_entities)} total entities")
-                                
-                                await self.client.send_file(
-                                    entity=target_channel_id,
-                                    file=message.media,
-                                    caption=parsed_caption,
-                                    formatting_entities=final_entities,
-                                    parse_mode=None,
-                                    supports_streaming=True
-                                )
-                            except Exception as parse_error:
-                                logger.warning(f"Failed to parse markdown in caption, using original entities: {parse_error}")
-                                # Fallback to original method
-                                await self.client.send_file(
-                                    entity=target_channel_id,
-                                    file=message.media,
-                                    caption=caption,
-                                    formatting_entities=message.entities,
-                                    parse_mode=None,
-                                    supports_streaming=True
-                                )
+                        # Add caption and entities if they exist
+                        if caption:
+                            send_file_kwargs['caption'] = caption
+                            
+                            # Preserve all caption entities exactly as they are
+                            if message.entities:
+                                logger.info(f"Preserving {len(message.entities)} caption formatting entities")
+                                send_file_kwargs['formatting_entities'] = message.entities
+                            
+                            logger.info(f"Sending media with caption: '{caption[:50]}{'...' if len(caption) > 50 else ''}'")
                         else:
-                            # No markdown syntax detected, use entities as-is
+                            logger.info("Sending media without caption")
+                        
+                        # Send the file with all parameters
+                        await self.client.send_file(**send_file_kwargs)
+                        logger.info("Successfully sent media with preserved caption and formatting")
+                        
+                    except Exception as primary_error:
+                        logger.warning(f"Primary send_file method failed: {primary_error}")
+                        
+                        # Fallback 1: Try without entities but keep caption
+                        if caption:
                             try:
+                                logger.info("Fallback: Sending media with caption but without entities")
                                 await self.client.send_file(
                                     entity=target_channel_id,
                                     file=message.media,
                                     caption=caption,
-                                    formatting_entities=message.entities,
-                                    parse_mode=None,
                                     supports_streaming=True,
-                                    force_document=False  # Keep original media type
+                                    force_document=False,
+                                    parse_mode=None
                                 )
-                                logger.info("Successfully sent media with original entities")
-                            except Exception as send_error:
-                                logger.error(f"Error in send_file with entities: {send_error}")
-                                # Fallback: try without entities
+                                logger.info("Fallback 1 successful: media sent with caption (no entities)")
+                                
+                            except Exception as fallback1_error:
+                                logger.warning(f"Fallback 1 failed: {fallback1_error}")
+                                
+                                # Fallback 2: Try without caption
+                                try:
+                                    logger.info("Fallback 2: Sending media without caption")
+                                    await self.client.send_file(
+                                        entity=target_channel_id,
+                                        file=message.media,
+                                        supports_streaming=True,
+                                        force_document=False
+                                    )
+                                    logger.info("Fallback 2 successful: media sent without caption")
+                                    
+                                    # If media was sent successfully but without caption, send caption as separate message
+                                    if caption:
+                                        try:
+                                            await asyncio.sleep(0.5)  # Small delay
+                                            logger.info("Sending caption as separate message")
+                                            if message.entities:
+                                                await self.client.send_message(
+                                                    entity=target_channel_id,
+                                                    message=caption,
+                                                    formatting_entities=message.entities,
+                                                    parse_mode=None
+                                                )
+                                            else:
+                                                await self.client.send_message(
+                                                    entity=target_channel_id,
+                                                    message=caption
+                                                )
+                                            logger.info("Caption sent as separate message")
+                                        except Exception as caption_error:
+                                            logger.error(f"Failed to send caption as separate message: {caption_error}")
+                                    
+                                except Exception as fallback2_error:
+                                    logger.error(f"All media sending methods failed: {fallback2_error}")
+                                    raise fallback2_error
+                        else:
+                            # No caption, try sending media only
+                            try:
+                                logger.info("Fallback: Sending media without caption")
                                 await self.client.send_file(
                                     entity=target_channel_id,
                                     file=message.media,
-                                    caption=caption,
                                     supports_streaming=True,
                                     force_document=False
                                 )
-                                logger.info("Sent media with caption but without entities as fallback")
-                    elif caption:
-                        # Caption without entities, but check if it has markdown that should be parsed
-                        if needs_markdown_parse:
-                            try:
-                                parsed_caption, parsed_entities = self.parse_mode.parse(caption)
-                                logger.info(f"Parsing markdown for caption without entities: {len(parsed_entities)} entities found")
-                                await self.client.send_file(
-                                    entity=target_channel_id,
-                                    file=message.media,
-                                    caption=parsed_caption,
-                                    formatting_entities=parsed_entities,
-                                    parse_mode=None,
-                                    supports_streaming=True
-                                )
-                            except Exception as parse_error:
-                                logger.warning(f"Failed to parse markdown in caption, sending as plain text: {parse_error}")
-                                await self.client.send_file(
-                                    entity=target_channel_id,
-                                    file=message.media,
-                                    caption=caption,
-                                    parse_mode=None,
-                                    supports_streaming=True
-                                )
-                        else:
-                            # No entities and no markdown, send with plain caption
-                            logger.info("Copying media with plain caption (no formatting entities)")
-                            await self.client.send_file(
-                                entity=target_channel_id,
-                                file=message.media,
-                                caption=caption,
-                                parse_mode=None,
-                                supports_streaming=True
-                            )
-                    else:
-                        # Media without caption
-                        logger.info("Copying media without caption")
-                        try:
-                            await self.client.send_file(
-                                entity=target_channel_id,
-                                file=message.media,
-                                supports_streaming=True,
-                                force_document=False  # Keep original media type
-                            )
-                            logger.info("Successfully sent media without caption")
-                        except Exception as send_error:
-                            logger.error(f"Error sending media without caption: {send_error}")
-                            raise
+                                logger.info("Media sent successfully without caption")
+                            except Exception as no_caption_error:
+                                logger.error(f"Failed to send media without caption: {no_caption_error}")
+                                raise no_caption_error
                     
                     logger.info(f"Successfully sent media file to target channel using direct send_file")
                 
