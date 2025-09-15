@@ -147,22 +147,8 @@ class TelegramEmojiBot:
             return
         try:
             async with self.db_pool.acquire() as conn:
-                # Command queue table
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS command_queue (
-                        id SERIAL PRIMARY KEY,
-                        command TEXT NOT NULL,
-                        args TEXT,
-                        requested_by BIGINT NOT NULL,
-                        chat_id BIGINT,
-                        message_id INTEGER,
-                        callback_data TEXT,
-                        status TEXT DEFAULT 'pending',
-                        result TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        processed_at TIMESTAMP
-                    )
-                """)
+                -- جدول command_queue محذوف من UserBot المستقل
+                -- هذا الجدول مخصص فقط للتواصل مع Control Bot
                 
                 # Emoji replacements table
                 await conn.execute("""
@@ -963,66 +949,10 @@ class TelegramEmojiBot:
             return f"❌ خطأ في عرض الصلاحيات: {e}"
 
     async def process_command_queue(self):
-        """Process pending commands from control bot with enhanced error handling"""
-        if self.db_pool is None:
-            return
-        
-        try:
-            async with self.db_pool.acquire() as conn:
-                # Get pending commands
-                commands = await conn.fetch(
-                    "SELECT * FROM command_queue WHERE status = 'pending' ORDER BY created_at LIMIT 10"
-                )
-                
-                for cmd_row in commands:
-                    command_id = None
-                    try:
-                        command_id = cmd_row['id']
-                        command = cmd_row['command']
-                        args = cmd_row['args'] or ""
-                        requested_by = cmd_row['requested_by']
-                        chat_id = cmd_row.get('chat_id')
-                        message_id = cmd_row.get('message_id')
-                        callback_data = cmd_row.get('callback_data')
-                        
-                        logger.info(f"Processing command queue ID {command_id}: {command} with args: {args}")
-                        
-                        # Mark as processing
-                        await conn.execute(
-                            "UPDATE command_queue SET status = 'processing' WHERE id = $1",
-                            command_id
-                        )
-                        
-                        # Execute command with enhanced handling
-                        result = await self.execute_queued_command(command, args, requested_by)
-                        
-                        # Clean up result for better display
-                        if result and len(result) > 3000:  # Truncate long results
-                            result = result[:2900] + "\n\n... (النتيجة مقطوعة للطول)"
-                        
-                        # Update with result
-                        await conn.execute(
-                            "UPDATE command_queue SET status = 'completed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
-                            result or "تم تنفيذ الأمر بنجاح", command_id
-                        )
-                        
-                        logger.info(f"Successfully processed command {command_id}")
-                        
-                    except Exception as cmd_error:
-                        error_msg = str(cmd_error)
-                        logger.error(f"Failed to process command {command_id}: {error_msg}")
-                        
-                        try:
-                            # Mark as failed with error details
-                            await conn.execute(
-                                "UPDATE command_queue SET status = 'failed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
-                                f"خطأ في التنفيذ: {error_msg}", command_id
-                            )
-                        except Exception as update_error:
-                            logger.error(f"Failed to update command {command_id} status: {update_error}")
-                
-        except Exception as e:
-            logger.error(f"Failed to process command queue: {e}")
+        """معالجة طابور الأوامر - معطل في UserBot المستقل"""
+        # تم تعطيل هذه الوظيفة لأن UserBot يعمل بشكل مستقل الآن
+        # هذه الوظيفة مخصصة فقط للتواصل مع Control Bot
+        pass
 
     async def execute_queued_command(self, command: str, args: str, requested_by: int) -> str:
         """Execute a queued command and return result with comprehensive command support"""
@@ -1227,14 +1157,9 @@ class TelegramEmojiBot:
             logger.error(f"Failed to send result to user {user_id}: {e}")
 
     async def start_command_queue_processor(self):
-        """Start periodic command queue processing"""
-        while True:
-            try:
-                await self.process_command_queue()
-                await asyncio.sleep(5)  # Check every 5 seconds
-            except Exception as e:
-                logger.error(f"Command queue processor error: {e}")
-                await asyncio.sleep(10)  # Wait longer on error
+        """معالج طابور الأوامر - معطل في UserBot المستقل"""
+        # هذه الوظيفة معطلة لأن UserBot يعمل بشكل مستقل
+        pass
 
     async def add_admin(self, user_id: int, username: str = None, added_by: int = None) -> bool:
         """Add admin to database and cache"""
@@ -5029,8 +4954,8 @@ class TelegramEmojiBot:
             # Setup event handlers
             self.setup_event_handlers()
             
-            # Start command queue processor
-            asyncio.create_task(self.start_command_queue_processor())
+            # معالج command_queue معطل في UserBot المستقل
+            # asyncio.create_task(self.start_command_queue_processor())
             
             logger.info("Bot is now running and monitoring channels...")
             logger.info("Command queue processor started for Control Bot integration")
