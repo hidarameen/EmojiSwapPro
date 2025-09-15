@@ -298,22 +298,30 @@ class TelegramEmojiBot:
         try:
             message_text = event.message.text.strip()
             chat_id = event.chat_id
+            logger.info(f"Handling private message: '{message_text}' from {chat_id}")
             
             # Parse command and arguments
             parts = message_text.split(None, 1)
             command = parts[0]
             args = parts[1] if len(parts) > 1 else ""
+            logger.info(f"Parsed command: '{command}', args: '{args}'")
             
             # Find matching Arabic command
             command_handler = None
             for arabic_cmd, handler_name in self.arabic_commands.items():
+                logger.info(f"Checking command '{command}' against '{arabic_cmd}'")
                 if command.startswith(arabic_cmd) or command.startswith(f"/{arabic_cmd}"):
+                    logger.info(f"Found matching command: {arabic_cmd} -> {handler_name}")
                     command_handler = getattr(self, f"cmd_{handler_name}", None)
+                    logger.info(f"Handler method: {command_handler}")
                     break
             
             if command_handler:
+                logger.info(f"Executing command handler: {command_handler.__name__}")
                 await command_handler(event, args)
+                logger.info("Command handler executed successfully")
             else:
+                logger.info("No matching command found, sending help message")
                 await event.reply("أمر غير معروف. استخدم 'مساعدة' لعرض الأوامر المتاحة.")
                 
         except Exception as e:
@@ -495,15 +503,21 @@ class TelegramEmojiBot:
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
             try:
+                # Log for debugging
+                logger.info(f"Message: is_private={event.is_private}, out={event.message.out}, chat_id={event.chat_id}, sender_id={event.sender_id}")
+                
+                # Handle private messages with commands
+                # Include saved messages (messages to self) where sender_id equals chat_id
+                if event.is_private and (not event.message.out or event.sender_id == event.chat_id):
+                    logger.info("Processing private message or saved message")
+                    await self.handle_private_message(event)
+                    return
+                
                 # Check if message is from a monitored channel  
                 event_peer_id = utils.get_peer_id(event.chat)
                 if event_peer_id in self.monitored_channels:
                     logger.info(f"New message in monitored channel {event_peer_id}")
                     await self.replace_emojis_in_message(event)
-                    
-                # Handle private messages with commands
-                elif event.is_private and not event.message.out:
-                    await self.handle_private_message(event)
                     
             except Exception as e:
                 logger.error(f"Error in new message handler: {e}")
