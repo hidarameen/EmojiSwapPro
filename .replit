@@ -53,8 +53,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "mastra dev"
-waitForPort = 5000
+args = ""
 
 [workflows.workflow.metadata]
 outputType = "automations"
