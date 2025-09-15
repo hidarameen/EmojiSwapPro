@@ -422,14 +422,57 @@ class TelegramEmojiBot:
                 if message.entities:
                     # Log the entities being preserved for debugging
                     logger.debug(f"Preserving {len(message.entities)} formatting entities")
-                    for entity in message.entities:
+                    
+                    # Process entities to ensure proper formatting preservation
+                    # Sort entities by offset to ensure proper order
+                    sorted_entities = sorted(message.entities, key=lambda e: e.offset)
+                    
+                    # Create a deep copy of entities to avoid modifying the original
+                    copied_entities = []
+                    for entity in sorted_entities:
                         entity_type = type(entity).__name__
                         logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
+                        
+                        # Recreate entity to ensure it's properly formed
+                        if hasattr(entity, 'document_id'):
+                            # Custom emoji entity
+                            copied_entities.append(MessageEntityCustomEmoji(
+                                offset=entity.offset,
+                                length=entity.length,
+                                document_id=entity.document_id
+                            ))
+                        elif hasattr(entity, 'url'):
+                            # Text URL entity
+                            copied_entities.append(type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                url=entity.url
+                            ))
+                        elif hasattr(entity, 'user_id'):
+                            # Mention entity
+                            copied_entities.append(type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                user_id=entity.user_id
+                            ))
+                        elif hasattr(entity, 'language'):
+                            # Pre entity with language
+                            copied_entities.append(type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                language=entity.language
+                            ))
+                        else:
+                            # Basic entity (bold, italic, code, etc.)
+                            copied_entities.append(type(entity)(
+                                offset=entity.offset,
+                                length=entity.length
+                            ))
                     
                     await self.client.send_message(
                         entity=target_channel_id,
                         message=text_content,
-                        formatting_entities=message.entities,
+                        formatting_entities=copied_entities,
                         parse_mode=None,  # Use raw entities to preserve everything exactly
                         link_preview=False  # Disable link preview to avoid conflicts
                     )
@@ -449,15 +492,58 @@ class TelegramEmojiBot:
                 if message.entities and caption:
                     # Log caption entities being preserved
                     logger.debug(f"Preserving {len(message.entities)} caption entities")
-                    for entity in message.entities:
+                    
+                    # Process caption entities to ensure proper formatting preservation
+                    # Sort entities by offset to ensure proper order
+                    sorted_entities = sorted(message.entities, key=lambda e: e.offset)
+                    
+                    # Create a deep copy of entities to avoid modifying the original
+                    copied_entities = []
+                    for entity in sorted_entities:
                         entity_type = type(entity).__name__
                         logger.debug(f"  - Caption {entity_type} at offset {entity.offset}, length {entity.length}")
+                        
+                        # Recreate entity to ensure it's properly formed
+                        if hasattr(entity, 'document_id'):
+                            # Custom emoji entity
+                            copied_entities.append(MessageEntityCustomEmoji(
+                                offset=entity.offset,
+                                length=entity.length,
+                                document_id=entity.document_id
+                            ))
+                        elif hasattr(entity, 'url'):
+                            # Text URL entity
+                            copied_entities.append(type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                url=entity.url
+                            ))
+                        elif hasattr(entity, 'user_id'):
+                            # Mention entity
+                            copied_entities.append(type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                user_id=entity.user_id
+                            ))
+                        elif hasattr(entity, 'language'):
+                            # Pre entity with language
+                            copied_entities.append(type(entity)(
+                                offset=entity.offset,
+                                length=entity.length,
+                                language=entity.language
+                            ))
+                        else:
+                            # Basic entity (bold, italic, code, etc.)
+                            copied_entities.append(type(entity)(
+                                offset=entity.offset,
+                                length=entity.length
+                            ))
                     
                     await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
                         caption=caption,
-                        formatting_entities=message.entities,
+                        formatting_entities=copied_entities,
                         parse_mode=None,  # Use raw entities to preserve everything exactly
                         supports_streaming=True  # Enable streaming for better performance
                     )
