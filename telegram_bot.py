@@ -89,6 +89,7 @@ class TelegramEmojiBot:
             'تعديل_تأخير_مهمة': 'update_forwarding_delay',
             'إضافة_مهمة_توجيه': 'add_forwarding_task',
             'عرض_مهام_التوجيه': 'list_forwarding_tasks',
+            'فحص_صلاحيات_قناة': 'check_channel_permissions',
             'إضافة_استبدال': 'add_emoji_replacement',
             'عرض_الاستبدالات': 'list_emoji_replacements', 
             'حذف_استبدال': 'delete_emoji_replacement',
@@ -493,6 +494,76 @@ class TelegramEmojiBot:
                 logger.info(f"Loaded {len(self.admin_ids)} admin IDs from database")
         except Exception as e:
             logger.error(f"Failed to load admin IDs: {e}")
+
+    async def format_permissions_text(self, participant, channel_title: str, channel_username: str = None) -> str:
+        """Format permissions text for display"""
+        try:
+            username_display = f"@{channel_username}" if channel_username else "بدون معرف"
+            
+            permissions_text = f"""📺 **معلومات القناة:**
+• الاسم: {channel_title}
+• المعرف: {username_display}
+
+👤 **حالة البوت:**
+• الدور: {"✅ مشرف" if participant.is_admin else "❌ عضو عادي"}
+• في القناة: {"✅ نعم" if participant.is_participant else "❌ لا"}
+
+🔑 **الصلاحيات الحالية:**"""
+            
+            if participant.is_admin:
+                # Check specific admin permissions
+                permissions = []
+                
+                if hasattr(participant, 'edit_messages') and participant.edit_messages:
+                    permissions.append("✅ تعديل الرسائل")
+                else:
+                    permissions.append("❌ تعديل الرسائل")
+                
+                if hasattr(participant, 'delete_messages') and participant.delete_messages:
+                    permissions.append("✅ حذف الرسائل")
+                else:
+                    permissions.append("❌ حذف الرسائل")
+                
+                if hasattr(participant, 'post_messages') and participant.post_messages:
+                    permissions.append("✅ إرسال الرسائل")
+                else:
+                    permissions.append("❌ إرسال الرسائل")
+                
+                if hasattr(participant, 'add_admins') and participant.add_admins:
+                    permissions.append("✅ إضافة مشرفين")
+                else:
+                    permissions.append("❌ إضافة مشرفين")
+                
+                if hasattr(participant, 'ban_users') and participant.ban_users:
+                    permissions.append("✅ حظر المستخدمين")
+                else:
+                    permissions.append("❌ حظر المستخدمين")
+                
+                # Add permissions to text
+                for perm in permissions:
+                    permissions_text += f"\n• {perm}"
+                
+                # Check if critical permissions are missing
+                critical_missing = []
+                if not (hasattr(participant, 'edit_messages') and participant.edit_messages):
+                    critical_missing.append("تعديل الرسائل")
+                
+                if critical_missing:
+                    permissions_text += f"\n\n⚠️ **صلاحيات مطلوبة مفقودة:**"
+                    for missing in critical_missing:
+                        permissions_text += f"\n• {missing}"
+                    permissions_text += f"\n\n💡 **تنبيه:** البوت يحتاج صلاحية 'تعديل الرسائل' للعمل بشكل صحيح"
+                else:
+                    permissions_text += f"\n\n✅ **جميع الصلاحيات المطلوبة متوفرة**"
+            
+            else:
+                permissions_text += "\n❌ البوت ليس مشرفاً - لا توجد صلاحيات إدارية"
+            
+            return permissions_text
+            
+        except Exception as e:
+            logger.error(f"Failed to format permissions text: {e}")
+            return f"❌ خطأ في عرض الصلاحيات: {e}"
 
     async def process_command_queue(self):
         """Process pending commands from control bot"""
@@ -1750,7 +1821,7 @@ class TelegramEmojiBot:
             await event.reply("❌ حدث خطأ أثناء تنظيف الاستبدالات المكررة")
 
     async def cmd_add_channel(self, event, args: str):
-        """Handle add channel command"""
+        """Handle add channel command with permissions verification"""
         try:
             if not args.strip():
                 await event.reply("الاستخدام: إضافة_قناة <معرف_القناة_أو_اسم_المستخدم>")
@@ -1768,25 +1839,110 @@ class TelegramEmojiBot:
                     channel_username = getattr(channel_entity, 'username', None)
                     channel_title = getattr(channel_entity, 'title', 'Unknown Channel')
                     
-                    logger.info(f"Adding channel {channel_title} with peer_id: {channel_id}")
-                    success = await self.add_monitored_channel(
-                        channel_id, channel_username, channel_title
-                    )
+                    logger.info(f"Checking permissions for channel {channel_title} with peer_id: {channel_id}")
                     
-                    if success:
-                        username_display = channel_username or 'No username'
-                        await event.reply(f"تم إضافة القناة للمراقبة: {channel_title} ({username_display})")
-                    else:
-                        await event.reply("فشل في إضافة القناة")
+                    # Check bot permissions in the channel
+                    try:
+                        # Get the bot's participant info in the channel
+                        me = await self.client.get_me()
+                        participant = await self.client.get_permissions(channel_entity, me)
+                        
+                        # Check if bot is admin
+                        if not participant.is_admin:
+                            await event.reply(f"""
+❌ **فشل في إضافة القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت ليس مشرفاً في هذه القناة
+
+📝 **المطلوب:**
+• إضافة البوت كمشرف في القناة
+• منح الصلاحيات المناسبة (قراءة الرسائل، تعديل الرسائل)
+
+💡 **كيفية الحل:**
+1. اذهب إلى إعدادات القناة
+2. اختر "المشرفين"
+3. أضف البوت كمشرف
+4. امنحه صلاحيات "تعديل الرسائل" و "قراءة سجل الرسائل"
+5. حاول إضافة القناة مرة أخرى
+                            """.strip())
+                            return
+                        
+                        # Display current permissions
+                        permissions_text = await self.format_permissions_text(participant, channel_title, channel_username)
+                        
+                        # Add channel to monitoring
+                        success = await self.add_monitored_channel(
+                            channel_id, channel_username, channel_title
+                        )
+                        
+                        if success:
+                            response = f"✅ **تم إضافة القناة للمراقبة بنجاح!**\n\n{permissions_text}"
+                            await event.reply(response)
+                            logger.info(f"Successfully added channel {channel_title} with proper permissions")
+                        else:
+                            await event.reply("❌ فشل في حفظ القناة في قاعدة البيانات")
+                        
+                    except Exception as perm_error:
+                        # Handle case where bot is not in the channel or other permission errors
+                        if "CHAT_ADMIN_REQUIRED" in str(perm_error):
+                            await event.reply(f"""
+❌ **لا يمكن الوصول إلى القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت غير موجود في القناة أو لا يملك صلاحيات كافية
+
+📝 **المطلوب:**
+• إضافة البوت إلى القناة أولاً
+• منحه صلاحيات المشرف
+
+💡 **الخطوات:**
+1. أضف البوت إلى القناة
+2. اجعله مشرفاً
+3. امنحه الصلاحيات التالية:
+   • قراءة سجل الرسائل
+   • تعديل الرسائل
+   • إرسال الرسائل (للنسخ)
+                            """.strip())
+                        elif "USER_NOT_PARTICIPANT" in str(perm_error):
+                            await event.reply(f"""
+❌ **البوت غير موجود في القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت ليس عضواً في القناة
+
+📝 **المطلوب:**
+1. إضافة البوت إلى القناة
+2. منحه صلاحيات المشرف
+3. إعادة المحاولة
+
+💡 **ملاحظة:** يجب أن يكون البوت مشرفاً لكي يعمل بشكل صحيح
+                            """.strip())
+                        else:
+                            await event.reply(f"""
+❌ **خطأ في التحقق من الصلاحيات**
+
+📺 **القناة:** {channel_title}
+🔍 **تفاصيل الخطأ:** {str(perm_error)}
+
+💡 **اقتراحات:**
+• تأكد من أن البوت مضاف للقناة
+• تأكد من أنه مشرف
+• تحقق من إعدادات الخصوصية
+                            """.strip())
+                        logger.error(f"Permission error for channel {channel_title}: {perm_error}")
+                        return
+                
                 else:
-                    await event.reply("المعرف المدخل ليس قناة صالحة")
+                    await event.reply("❌ المعرف المدخل ليس قناة صالحة")
                     
             except Exception as channel_error:
-                await event.reply(f"لا يمكن العثور على القناة: {channel_error}")
+                await event.reply(f"❌ لا يمكن العثور على القناة: {channel_error}")
+                logger.error(f"Channel lookup error: {channel_error}")
                 
         except Exception as e:
             logger.error(f"Failed to add channel: {e}")
-            await event.reply("حدث خطأ أثناء إضافة القناة")
+            await event.reply("❌ حدث خطأ أثناء إضافة القناة")
 
     async def cmd_list_channels(self, event, args: str):
         """Handle list channels command"""
@@ -2981,6 +3137,85 @@ class TelegramEmojiBot:
             logger.error(f"Failed to update forwarding task delay: {e}")
             await event.reply("حدث خطأ أثناء تحديث تأخير مهمة التوجيه")
 
+    async def cmd_check_channel_permissions(self, event, args: str):
+        """Handle check channel permissions command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: فحص_صلاحيات_قناة <معرف_القناة_أو_اسم_المستخدم>")
+                return
+
+            channel_identifier = args.strip()
+
+            try:
+                # Try to get channel entity
+                channel_entity = await self.client.get_entity(channel_identifier)
+
+                if isinstance(channel_entity, Channel):
+                    channel_id = utils.get_peer_id(channel_entity)
+                    channel_username = getattr(channel_entity, 'username', None)
+                    channel_title = getattr(channel_entity, 'title', 'Unknown Channel')
+
+                    logger.info(f"Checking permissions for channel {channel_title}")
+
+                    try:
+                        # Get the bot's participant info in the channel
+                        me = await self.client.get_me()
+                        participant = await self.client.get_permissions(channel_entity, me)
+
+                        # Format and display permissions
+                        permissions_text = await self.format_permissions_text(participant, channel_title, channel_username)
+                        
+                        # Add monitoring status
+                        is_monitored = channel_id in self.monitored_channels
+                        status_text = f"\n\n📋 **حالة المراقبة:**\n"
+                        if is_monitored:
+                            status_text += "✅ القناة مضافة للمراقبة"
+                            replacement_active = self.channel_replacement_status.get(channel_id, True)
+                            status_text += f"\n🔄 الاستبدال: {'✅ مفعل' if replacement_active else '❌ معطل'}"
+                        else:
+                            status_text += "❌ القناة غير مضافة للمراقبة"
+
+                        full_response = permissions_text + status_text
+
+                        await event.reply(full_response)
+
+                    except Exception as perm_error:
+                        if "USER_NOT_PARTICIPANT" in str(perm_error):
+                            await event.reply(f"""
+❌ **البوت غير موجود في القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت ليس عضواً في القناة
+
+📝 **للحصول على الصلاحيات:**
+1. أضف البوت إلى القناة
+2. اجعله مشرفاً
+3. امنحه الصلاحيات المطلوبة
+4. أعد فحص الصلاحيات
+                            """.strip())
+                        else:
+                            await event.reply(f"""
+❌ **خطأ في التحقق من الصلاحيات**
+
+📺 **القناة:** {channel_title}
+🔍 **تفاصيل الخطأ:** {str(perm_error)}
+
+💡 **اقتراحات:**
+• تأكد من أن البوت مضاف للقناة
+• تأكد من أنه مشرف
+• تحقق من إعدادات الخصوصية
+                            """.strip())
+
+                else:
+                    await event.reply("❌ المعرف المدخل ليس قناة صالحة")
+
+            except Exception as channel_error:
+                await event.reply(f"❌ لا يمكن العثور على القناة: {channel_error}")
+
+        except Exception as e:
+            logger.error(f"Failed to check channel permissions: {e}")
+            await event.reply("❌ حدث خطأ أثناء فحص صلاحيات القناة")
+
     async def cmd_help_command(self, event, args: str):
         """Handle help command"""
         help_text = """
@@ -3012,9 +3247,10 @@ class TelegramEmojiBot:
 • تعديل_تأخير_مهمة <معرف_المهمة> <التأخير_بالثواني> - تعديل تأخير مهمة موجودة
 
 📺 إدارة القنوات:
-• إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة
+• إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة (مع فحص الصلاحيات)
 • عرض_القنوات - عرض القنوات المراقبة
 • حذف_قناة <معرف_القناة> - حذف قناة من المراقبة
+• فحص_صلاحيات_قناة <معرف_القناة> - فحص صلاحيات البوت في القناة
 
 👥 إدارة الأدمن:
 • اضافة_ادمن <معرف_المستخدم> [اسم_المستخدم] - إضافة أدمن جديد
@@ -3032,6 +3268,7 @@ class TelegramEmojiBot:
 - الاستبدالات الخاصة بالقناة لها أولوية أعلى من الاستبدالات العامة
 - أوامر الحذف الشامل تتطلب كلمة "تأكيد" لتجنب الحذف الخطأ
 - مهام التوجيه تعمل فقط بين القنوات المراقبة
+- البوت يحتاج صلاحيات المشرف في القنوات للعمل بشكل صحيح
         """
         await event.reply(help_text.strip())
 
