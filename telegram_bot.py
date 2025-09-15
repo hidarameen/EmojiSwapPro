@@ -67,18 +67,18 @@ class TelegramEmojiBot:
         # Cache for admin list
         self.admin_ids: set = {6602517122}  # Default admin
         
-        # Arabic command mappings
+        # Arabic command mappings - ordered by length (longest first) to avoid conflicts
         self.arabic_commands = {
-            'إضافة_استبدال': 'add_emoji_replacement',
-            'عرض_الاستبدالات': 'list_emoji_replacements', 
-            'حذف_استبدال': 'delete_emoji_replacement',
-            'حذف_جميع_الاستبدالات': 'delete_all_emoji_replacements',
-            'تنظيف_الاستبدالات': 'clean_duplicate_replacements',
+            'حذف_جميع_استبدالات_قناة': 'delete_all_channel_emoji_replacements',
             'إضافة_استبدال_قناة': 'add_channel_emoji_replacement',
             'عرض_استبدالات_قناة': 'list_channel_emoji_replacements',
             'حذف_استبدال_قناة': 'delete_channel_emoji_replacement',
-            'حذف_جميع_استبدالات_قناة': 'delete_all_channel_emoji_replacements',
             'نسخ_استبدالات_قناة': 'copy_channel_emoji_replacements',
+            'حذف_جميع_الاستبدالات': 'delete_all_emoji_replacements',
+            'تنظيف_الاستبدالات': 'clean_duplicate_replacements',
+            'إضافة_استبدال': 'add_emoji_replacement',
+            'عرض_الاستبدالات': 'list_emoji_replacements', 
+            'حذف_استبدال': 'delete_emoji_replacement',
             'إضافة_قناة': 'add_channel',
             'عرض_القنوات': 'list_channels',
             'حذف_قناة': 'remove_channel',
@@ -591,15 +591,27 @@ class TelegramEmojiBot:
             args = parts[1] if len(parts) > 1 else ""
             logger.info(f"Parsed command: '{command}', args: '{args}'")
             
-            # Find matching Arabic command
+            # Find matching Arabic command - exact match first, then startswith
             command_handler = None
-            for arabic_cmd, handler_name in self.arabic_commands.items():
-                logger.info(f"Checking command '{command}' against '{arabic_cmd}'")
-                if command.startswith(arabic_cmd) or command.startswith(f"/{arabic_cmd}"):
-                    logger.info(f"Found matching command: {arabic_cmd} -> {handler_name}")
-                    command_handler = getattr(self, f"cmd_{handler_name}", None)
-                    logger.info(f"Handler method: {command_handler}")
-                    break
+            
+            # Try exact match first
+            if command in self.arabic_commands:
+                handler_name = self.arabic_commands[command]
+                logger.info(f"Found exact command match: {command} -> {handler_name}")
+                command_handler = getattr(self, f"cmd_{handler_name}", None)
+            elif command.startswith('/') and command[1:] in self.arabic_commands:
+                handler_name = self.arabic_commands[command[1:]]
+                logger.info(f"Found exact command match with slash: {command} -> {handler_name}")
+                command_handler = getattr(self, f"cmd_{handler_name}", None)
+            else:
+                # Fall back to startswith for partial matches
+                for arabic_cmd, handler_name in self.arabic_commands.items():
+                    logger.info(f"Checking command '{command}' against '{arabic_cmd}'")
+                    if command.startswith(arabic_cmd) or command.startswith(f"/{arabic_cmd}"):
+                        logger.info(f"Found matching command: {arabic_cmd} -> {handler_name}")
+                        command_handler = getattr(self, f"cmd_{handler_name}", None)
+                        logger.info(f"Handler method: {command_handler}")
+                        break
             
             if command_handler:
                 logger.info(f"Executing command handler: {command_handler.__name__}")
