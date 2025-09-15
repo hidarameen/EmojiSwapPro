@@ -556,34 +556,16 @@ class TelegramEmojiBot:
                         logger.info("Direct forwarding successful")
                     except Exception as forward_error:
                         logger.error(f"Direct forwarding also failed: {forward_error}")
-                        # Final fallback: send caption only if exists
+                        # CRITICAL: Never send caption only without media
+                        # This would violate the core requirement of the routing function
+                        logger.error(f"❌ All media sending attempts failed for message ID {message.id}")
+                        logger.error(f"❌ Media type: {type(message.media)}")
+                        logger.error(f"❌ Source: {source_channel_id}, Target: {target_channel_id}")
                         if caption:
-                            logger.info("Final fallback: sending caption only")
-                            try:
-                                # Check if caption has markdown-style formatting
-                                caption_needs_markdown_parse = ('**' in caption or '__' in caption or 
-                                                               '~~' in caption or '`' in caption or
-                                                               '[' in caption and '](' in caption)
-                                
-                                if caption_needs_markdown_parse and message.entities:
-                                    parsed_caption, parsed_entities = self.parse_mode.parse(caption)
-                                    await self.client.send_message(
-                                        entity=target_channel_id,
-                                        message=f"⚠️ فشل في نسخ الوسائط، النص فقط:\n\n{parsed_caption}",
-                                        formatting_entities=parsed_entities,
-                                        parse_mode=None
-                                    )
-                                else:
-                                    await self.client.send_message(
-                                        entity=target_channel_id,
-                                        message=f"⚠️ فشل في نسخ الوسائط، النص فقط:\n\n{caption}",
-                                        formatting_entities=message.entities if caption else None,
-                                        parse_mode=None
-                                    )
-                            except Exception as caption_error:
-                                logger.error(f"Failed to send caption fallback: {caption_error}")
-                        else:
-                            logger.info("No caption available for fallback")
+                            logger.error(f"❌ Caption was: '{caption[:100]}{'...' if len(caption) > 100 else ''}'")
+                        # Do NOT send caption only - this is the main issue we're fixing
+                        # Instead, skip this message entirely to maintain media+caption integrity
+                        return
                             
             elif message.text or message.message:
                 # Pure text message (no media) - preserve ALL formatting entities including:
