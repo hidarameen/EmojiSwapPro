@@ -411,11 +411,35 @@ class TelegramEmojiBot:
                 await event.reply("لا توجد استبدالات إيموجي محفوظة")
                 return
             
-            response = "📋 قائمة استبدالات الإيموجي:\n\n"
-            for normal_emoji, premium_id in self.emoji_mappings.items():
-                response += f"{normal_emoji} -> {premium_id}\n"
+            # Create the response with premium emojis
+            response_parts = ["📋 قائمة استبدالات الإيموجي:\n"]
             
-            await event.reply(response)
+            for normal_emoji, premium_id in self.emoji_mappings.items():
+                # Create markdown for premium emoji
+                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_id})"
+                response_parts.append(f"{normal_emoji} → {premium_emoji_markdown} (ID: {premium_id})")
+            
+            # Join all parts
+            response_text = "\n".join(response_parts)
+            
+            # Parse the text to convert premium emoji markdown
+            try:
+                parsed_text, entities = self.parse_mode.parse(response_text)
+                
+                # Send with formatting entities to show premium emojis
+                await self.client.send_message(
+                    event.chat_id,
+                    parsed_text,
+                    formatting_entities=entities
+                )
+                
+            except Exception as parse_error:
+                logger.error(f"Failed to parse premium emojis in list: {parse_error}")
+                # Fallback to simple text format
+                simple_response = "📋 قائمة استبدالات الإيموجي:\n\n"
+                for normal_emoji, premium_id in self.emoji_mappings.items():
+                    simple_response += f"{normal_emoji} → إيموجي مميز (ID: {premium_id})\n"
+                await event.reply(simple_response)
             
         except Exception as e:
             logger.error(f"Failed to list emoji replacements: {e}")
