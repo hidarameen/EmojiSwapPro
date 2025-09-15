@@ -490,7 +490,7 @@ class TelegramEmojiBot:
             return False
 
     def extract_emojis_from_text(self, text: str) -> List[str]:
-        """Extract all unique emojis from text using regex - handles composite emojis with variation selectors"""
+        """Extract all unique emojis and symbols from text using regex - handles composite emojis, variation selectors, and special symbols"""
         
         # Debug: Print Unicode codepoints for each character
         logger.info(f"Text analysis for: '{text}'")
@@ -498,10 +498,10 @@ class TelegramEmojiBot:
             unicode_point = ord(char)
             logger.info(f"  Char {i}: '{char}' -> U+{unicode_point:04X}")
         
-        # Enhanced regex pattern to match composite emojis (base + variation selector)
-        # This pattern matches: base_emoji + optional_variation_selector + optional_zero_width_joiner + optional_other_components
+        # Enhanced regex pattern to match composite emojis and common symbols
         emoji_pattern = re.compile(
             r"("
+            # Standard emoji ranges
             r"[\U0001F600-\U0001F64F"  # emoticons
             r"\U0001F300-\U0001F5FF"   # symbols & pictographs
             r"\U0001F680-\U0001F6FF"   # transport & map
@@ -526,6 +526,36 @@ class TelegramEmojiBot:
             r"\U0001F22F"              # squared cjk unified ideograph-6307
             r"\U0001F232-\U0001F23A"   # squared symbols
             r"\U0001F250-\U0001F251"   # circled symbols
+            # Common punctuation and symbols that users might want to replace
+            r"\U00002022"              # bullet point •
+            r"\U00002023"              # triangular bullet ‣
+            r"\U00002043"              # hyphen bullet ⁃
+            r"\U0000204C"              # black leftwards bullet ⁌
+            r"\U0000204D"              # black rightwards bullet ⁍
+            r"\U000025E6"              # white bullet ◦
+            r"\U00002219"              # bullet operator ∙
+            r"\U000000B7"              # middle dot ·
+            r"\U000025AA"              # black small square ▪
+            r"\U000025AB"              # white small square ▫
+            r"\U000025B6"              # black right-pointing triangle ▶
+            r"\U000025C0"              # black left-pointing triangle ◀
+            r"\U000025CF"              # black circle ●
+            r"\U000025CB"              # white circle ○
+            r"\U000025A0"              # black square ■
+            r"\U000025A1"              # white square □
+            r"\U00002713"              # check mark ✓
+            r"\U00002714"              # heavy check mark ✔
+            r"\U00002717"              # ballot x ✗
+            r"\U00002718"              # heavy ballot x ✘
+            r"\U0000274C"              # cross mark ❌
+            r"\U00002705"              # white heavy check mark ✅
+            r"\U0000274E"              # negative squared cross mark ❎
+            r"\U000027A1"              # black rightwards arrow ➡
+            r"\U00002B05"              # leftwards black arrow ⬅
+            r"\U00002B06"              # upwards black arrow ⬆
+            r"\U00002B07"              # downwards black arrow ⬇
+            r"\U000021A9"              # leftwards arrow with hook ↩
+            r"\U000021AA"              # rightwards arrow with hook ↪
             r"]"
             r"[\U0000FE00-\U0000FE0F]?"  # optional variation selectors
             r"(?:\U0000200D"             # zero-width joiner (for compound emojis)
@@ -553,14 +583,76 @@ class TelegramEmojiBot:
             r"\U0001F22F"
             r"\U0001F232-\U0001F23A"
             r"\U0001F250-\U0001F251"
+            r"\U00002022"
+            r"\U00002023"
+            r"\U00002043"
+            r"\U0000204C"
+            r"\U0000204D"
+            r"\U000025E6"
+            r"\U00002219"
+            r"\U000000B7"
+            r"\U000025AA"
+            r"\U000025AB"
+            r"\U000025B6"
+            r"\U000025C0"
+            r"\U000025CF"
+            r"\U000025CB"
+            r"\U000025A0"
+            r"\U000025A1"
+            r"\U00002713"
+            r"\U00002714"
+            r"\U00002717"
+            r"\U00002718"
+            r"\U0000274C"
+            r"\U00002705"
+            r"\U0000274E"
+            r"\U000027A1"
+            r"\U00002B05"
+            r"\U00002B06"
+            r"\U00002B07"
+            r"\U000021A9"
+            r"\U000021AA"
             r"][\U0000FE00-\U0000FE0F]?)?"  # optional second emoji component with variation selector
             r")",
             flags=re.UNICODE
         )
         
-        # Get all composite emojis found in text
+        # Get all emojis and symbols found in text
         found_emojis = emoji_pattern.findall(text)
-        logger.info(f"Regex found emojis: {found_emojis}")
+        logger.info(f"Regex found emojis/symbols: {found_emojis}")
+        
+        # Fallback: Check each character individually for common symbols that might be missed
+        fallback_symbols = {
+            '•': '\U00002022',  # bullet point
+            '◦': '\U000025E6',  # white bullet
+            '▪': '\U000025AA',  # black small square
+            '▫': '\U000025AB',  # white small square
+            '●': '\U000025CF',  # black circle
+            '○': '\U000025CB',  # white circle
+            '■': '\U000025A0',  # black square
+            '□': '\U000025A1',  # white square
+            '✓': '\U00002713',  # check mark
+            '✔': '\U00002714',  # heavy check mark
+            '✗': '\U00002717',  # ballot x
+            '✘': '\U00002718',  # heavy ballot x
+            '❌': '\U0000274C', # cross mark
+            '✅': '\U00002705', # white heavy check mark
+            '❎': '\U0000274E', # negative squared cross mark
+            '➡': '\U000027A1',  # black rightwards arrow
+            '⬅': '\U00002B05',  # leftwards black arrow
+            '⬆': '\U00002B06',  # upwards black arrow
+            '⬇': '\U00002B07',  # downwards black arrow
+            '↩': '\U000021A9',  # leftwards arrow with hook
+            '↪': '\U000021AA',  # rightwards arrow with hook
+            '·': '\U000000B7',  # middle dot
+            '∙': '\U00002219',  # bullet operator
+        }
+        
+        # Check for symbols that might have been missed by the regex
+        for char in text:
+            if char in fallback_symbols and char not in found_emojis:
+                found_emojis.append(char)
+                logger.info(f"Fallback found symbol: {char} (U+{ord(char):04X})")
         
         # Return unique emojis while preserving order
         unique_emojis = []
@@ -570,7 +662,7 @@ class TelegramEmojiBot:
                 unique_emojis.append(emoji)
                 seen.add(emoji)
         
-        logger.info(f"Final unique emojis: {unique_emojis}")
+        logger.info(f"Final unique emojis/symbols: {unique_emojis}")
         return unique_emojis
 
     async def replace_emojis_in_message(self, event):
