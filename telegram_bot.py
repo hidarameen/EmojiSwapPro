@@ -438,10 +438,17 @@ class TelegramEmojiBot:
                 # Preserve all entities exactly as they are to maintain complete formatting
                 if message.entities:
                     # Log the entities being preserved for debugging
-                    logger.debug(f"Preserving {len(message.entities)} formatting entities")
+                    logger.info(f"Preserving {len(message.entities)} formatting entities for copying")
+                    premium_emoji_count = 0
                     for entity in message.entities:
                         entity_type = type(entity).__name__
-                        logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
+                        if isinstance(entity, MessageEntityCustomEmoji):
+                            premium_emoji_count += 1
+                            logger.info(f"  - Premium Emoji: {entity_type} at offset {entity.offset}, length {entity.length}, ID: {entity.document_id}")
+                        else:
+                            logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
+                    
+                    logger.info(f"Copying message with {premium_emoji_count} premium emojis and {len(message.entities) - premium_emoji_count} other formatting entities")
                     
                     await self.client.send_message(
                         entity=target_channel_id,
@@ -452,6 +459,7 @@ class TelegramEmojiBot:
                     )
                 else:
                     # No entities, send plain text
+                    logger.info("Copying plain text message (no formatting entities)")
                     await self.client.send_message(
                         entity=target_channel_id,
                         message=text_content,
@@ -1551,16 +1559,26 @@ class TelegramEmojiBot:
                                 logger.info(f"New: {new_custom_emojis}")
                     
                     if should_edit:
-                        # Edit the original message with merged entities
-                        await self.client.edit_message(
-                            event.chat_id,
-                            message.id,
-                            parsed_text,
-                            formatting_entities=final_entities,
-                            parse_mode=None  # Use raw entities to preserve everything
-                        )
-                        
-                        logger.info(f"Replaced emojis in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
+                        try:
+                            # Edit the original message with merged entities
+                            await self.client.edit_message(
+                                event.chat_id,
+                                message.id,
+                                parsed_text,
+                                formatting_entities=final_entities,
+                                parse_mode=None  # Use raw entities to preserve everything
+                            )
+                            
+                            logger.info(f"Successfully replaced emojis in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
+                            logger.info(f"Final message contains {sum(1 for entity in final_entities if hasattr(entity, 'document_id'))} premium emojis")
+                            
+                        except Exception as edit_error:
+                            logger.error(f"Failed to edit message {message.id}: {edit_error}")
+                            logger.error(f"Original text: '{original_text}'")
+                            logger.error(f"Modified text: '{modified_text}'")
+                            logger.error(f"Parsed text: '{parsed_text}'")
+                            logger.error(f"Final entities count: {len(final_entities)}")
+                            raise  # Re-raise to ensure the error is handled properly
                     
                 except Exception as edit_error:
                     # Log the specific error but don't treat it as critical since the message forwarding should still work
@@ -4510,13 +4528,32 @@ class TelegramEmojiBot:
                         await self.replace_emojis_in_message(event)
                         
                         # Then handle forwarding (after emoji replacement)
+                        # Wait a moment to ensure the edit is processed
+                        await asyncio.sleep(0.5)
+                        
                         # Get the updated message after emoji replacement
                         updated_message = event.message
                         try:
-                            # Try to get the most recent version of the message
-                            updated_message = await self.client.get_messages(event.chat, ids=event.message.id)
-                            if isinstance(updated_message, list) and len(updated_message) > 0:
-                                updated_message = updated_message[0]
+                            # Try to get the most recent version of the message with retries
+                            for attempt in range(3):
+                                updated_message = await self.client.get_messages(event.chat, ids=event.message.id)
+                                if isinstance(updated_message, list) and len(updated_message) > 0:
+                                    updated_message = updated_message[0]
+                                
+                                # Check if the message has premium emojis (indicating successful replacement)
+                                if updated_message.entities:
+                                    has_premium_emojis = any(
+                                        isinstance(entity, MessageEntityCustomEmoji) 
+                                        for entity in updated_message.entities
+                                    )
+                                    if has_premium_emojis:
+                                        logger.info(f"Successfully retrieved updated message with premium emojis for forwarding")
+                                        break
+                                
+                                if attempt < 2:  # Don't sleep on the last attempt
+                                    await asyncio.sleep(0.5)  # Wait before retry
+                            else:
+                                logger.warning(f"Could not get updated message with premium emojis after 3 attempts")
                         except Exception as e:
                             logger.warning(f"Could not fetch updated message, using original: {e}")
                             updated_message = event.message
