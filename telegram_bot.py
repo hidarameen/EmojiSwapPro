@@ -68,8 +68,9 @@ class TelegramEmojiBot:
         # Cache for forwarding tasks
         self.forwarding_tasks: Dict[int, Dict[str, Union[int, bool]]] = {}  # task_id -> {source, target, active}
         
-        # Cache for admin list
+        # Cache for admin list and session owner
         self.admin_ids: set = {6602517122}  # Default admin
+        self.userbot_admin_id: Optional[int] = None  # Will be set after getting bot info
         
         # Arabic command mappings - ordered by length (longest first) to avoid conflicts
         self.arabic_commands = {
@@ -2696,7 +2697,7 @@ class TelegramEmojiBot:
             if user_id in self.admin_ids:
                 return "⚠️ هذا المستخدم مخول بالفعل"
             
-            success = await self.add_admin(user_id, username, self.userbot_admin_id)
+            success = await self.add_admin(user_id, username, self.userbot_admin_id or 6602517122)
             return f"✅ تم إضافة المستخدم {user_id} بنجاح" if success else "❌ فشل في إضافة المستخدم"
             
         except Exception as e:
@@ -2713,8 +2714,9 @@ class TelegramEmojiBot:
             except ValueError:
                 return "❌ معرف المستخدم يجب أن يكون رقماً"
             
-            if user_id == self.userbot_admin_id:
-                return "❌ لا يمكن حذف الأدمن الرئيسي"
+            # Protect both the default admin and session owner
+            if user_id == 6602517122 or user_id == self.userbot_admin_id:
+                return "❌ لا يمكن حذف الأدمن الرئيسي أو صاحب الجلسة"
                 
             if user_id not in self.admin_ids:
                 return "❌ هذا المستخدم ليس مخولاً"
@@ -4554,7 +4556,8 @@ class TelegramEmojiBot:
             me = await self.client.get_me()
             first_name = getattr(me, 'first_name', 'Unknown User')
             username = getattr(me, 'username', None) or 'Unknown'
-            logger.info(f"Bot started as: {first_name} (@{username})")
+            self.userbot_admin_id = me.id  # Set the session owner ID
+            logger.info(f"Bot started as: {first_name} (@{username}) - ID: {self.userbot_admin_id}")
             
             # Set up bot commands for Telegram Business shortcuts
             await self.setup_bot_commands()
