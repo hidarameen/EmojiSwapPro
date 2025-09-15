@@ -2300,7 +2300,127 @@ class TelegramEmojiBot:
 
     async def cmd_add_channel(self, event, args: str):
         """Handle add channel command with permissions verification"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: إضافة_قناة <معرف_القناة_أو_اسم_المستخدم>")
+                return
+            
+            channel_identifier = args.strip()
+            
+            try:
+                # Try to get channel entity
+                channel_entity = await self.client.get_entity(channel_identifier)
+                
+                if isinstance(channel_entity, Channel):
+                    # Use peer_id for consistent ID comparison
+                    channel_id = utils.get_peer_id(channel_entity)
+                    channel_username = getattr(channel_entity, 'username', None)
+                    channel_title = getattr(channel_entity, 'title', 'Unknown Channel')
+                    
+                    logger.info(f"Checking permissions for channel {channel_title} with peer_id: {channel_id}")
+                    
+                    # Check bot permissions in the channel
+                    try:
+                        # Get the bot's participant info in the channel
+                        me = await self.client.get_me()
+                        participant = await self.client.get_permissions(channel_entity, me)
+                        
+                        # Check if bot is admin
+                        if not participant.is_admin:
+                            await event.reply(f"""
+❌ **فشل في إضافة القناة**
 
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت ليس مشرفاً في هذه القناة
+
+📝 **المطلوب:**
+• إضافة البوت كمشرف في القناة
+• منح الصلاحيات المناسبة (قراءة الرسائل، تعديل الرسائل)
+
+💡 **كيفية الحل:**
+1. اذهب إلى إعدادات القناة
+2. اختر "المشرفين"
+3. أضف البوت كمشرف
+4. امنحه صلاحيات "تعديل الرسائل" و "قراءة سجل الرسائل"
+5. حاول إضافة القناة مرة أخرى
+                            """.strip())
+                            return
+                        
+                        # Display current permissions
+                        permissions_text = await self.format_permissions_text(participant, channel_title, channel_username)
+                        
+                        # Add channel to monitoring
+                        success = await self.add_monitored_channel(
+                            channel_id, channel_username, channel_title
+                        )
+                        
+                        if success:
+                            response = f"✅ **تم إضافة القناة للمراقبة بنجاح!**\n\n{permissions_text}"
+                            await event.reply(response)
+                            logger.info(f"Successfully added channel {channel_title} with proper permissions")
+                        else:
+                            await event.reply("❌ فشل في حفظ القناة في قاعدة البيانات")
+                        
+                    except Exception as perm_error:
+                        # Handle case where bot is not in the channel or other permission errors
+                        if "CHAT_ADMIN_REQUIRED" in str(perm_error):
+                            await event.reply(f"""
+❌ **لا يمكن الوصول إلى القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت غير موجود في القناة أو لا يملك صلاحيات كافية
+
+📝 **المطلوب:**
+• إضافة البوت إلى القناة أولاً
+• منحه صلاحيات المشرف
+
+💡 **الخطوات:**
+1. أضف البوت إلى القناة
+2. اجعله مشرفاً
+3. امنحه الصلاحيات التالية:
+   • قراءة سجل الرسائل
+   • تعديل الرسائل
+   • إرسال الرسائل (للنسخ)
+                            """.strip())
+                        elif "USER_NOT_PARTICIPANT" in str(perm_error):
+                            await event.reply(f"""
+❌ **البوت غير موجود في القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت ليس عضواً في القناة
+
+📝 **المطلوب:**
+1. إضافة البوت إلى القناة
+2. منحه صلاحيات المشرف
+3. إعادة المحاولة
+
+💡 **ملاحظة:** يجب أن يكون البوت مشرفاً لكي يعمل بشكل صحيح
+                            """.strip())
+                        else:
+                            await event.reply(f"""
+❌ **خطأ في التحقق من الصلاحيات**
+
+📺 **القناة:** {channel_title}
+🔍 **تفاصيل الخطأ:** {str(perm_error)}
+
+💡 **اقتراحات:**
+• تأكد من أن البوت مضاف للقناة
+• تأكد من أنه مشرف
+• تحقق من إعدادات الخصوصية
+                            """.strip())
+                        logger.error(f"Permission error for channel {channel_title}: {perm_error}")
+                        return
+                
+                else:
+                    await event.reply("❌ المعرف المدخل ليس قناة صالحة")
+                    
+            except Exception as channel_error:
+                await event.reply(f"❌ لا يمكن العثور على القناة: {channel_error}")
+                logger.error(f"Channel lookup error: {channel_error}")
+                
+        except Exception as e:
+            logger.error(f"Failed to add channel: {e}")
+            await event.reply("❌ حدث خطأ أثناء إضافة القناة")
 
     # ============= QUEUE COMMAND HANDLERS =============
 
