@@ -776,6 +776,7 @@ class TelegramEmojiBot:
             r"\U0001F900-\U0001F9FF"   # supplemental symbols
             r"\U00002600-\U000026FF"   # miscellaneous symbols
             r"\U0001F170-\U0001F251"   # enclosed characters
+            r"\U0001F7E0-\U0001F7FF"   # geometric shapes extended
             r"\U00002190-\U000021FF"   # arrows
             r"\U00002100-\U0000214F"   # letterlike symbols
             r"\U00002150-\U0000218F"   # number forms
@@ -833,6 +834,7 @@ class TelegramEmojiBot:
             r"\U0001F900-\U0001F9FF"
             r"\U00002600-\U000026FF"
             r"\U0001F170-\U0001F251"
+            r"\U0001F7E0-\U0001F7FF"
             r"\U00002190-\U000021FF"
             r"\U00002100-\U0000214F"
             r"\U00002150-\U0000218F"
