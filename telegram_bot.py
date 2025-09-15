@@ -422,201 +422,150 @@ class TelegramEmojiBot:
             logger.error(f"Failed to perform delayed copy from {source_channel_id} to {target_channel_id}: {e}")
 
     async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
-        """Copy message content to target channel with complete formatting preservation"""
+        """Copy message content to target channel with full formatting preservation"""
         try:
             # Copy the message content instead of forwarding
             if message.text or message.message:
                 # Text message - preserve ALL formatting entities including:
-                # - Bold (**text**), Italic (*text*), Underline (__text__), Strikethrough (~~text~~)
-                # - Code (`code`), Pre/Code blocks (```code```)
-                # - Links [text](url), Mentions (@username)
-                # - Custom emojis [emoji](emoji/id)
-                # - Spoilers ||text||
-                # - Blockquotes (> text)
-                # - And all other Telegram formatting entities
+                # - Bold, Italic, Underline, Strikethrough
+                # - Code, Pre (code blocks)
+                # - Links, Mentions
+                # - Custom emojis
+                # - Spoilers
+                # - And all other Telegram formatting
                 text_content = message.text or message.message
                 
-                # Create a comprehensive copy of all formatting entities
-                preserved_entities = []
+                # Check if the text contains markdown-style formatting (like **text**)
+                # that needs to be converted to proper Telegram entities
+                needs_markdown_parse = False
+                if ('**' in text_content or '__' in text_content or 
+                    '~~' in text_content or '`' in text_content or
+                    '[' in text_content and '](' in text_content):
+                    needs_markdown_parse = True
+                
+                # Preserve all entities exactly as they are to maintain complete formatting
                 if message.entities:
-                    # Deep copy all entities to preserve their exact formatting
-                    from telethon.tl.types import (
-                        MessageEntityBold, MessageEntityItalic, MessageEntityUnderline,
-                        MessageEntityStrikethrough, MessageEntityCode, MessageEntityPre,
-                        MessageEntityTextUrl, MessageEntityUrl, MessageEntityMention,
-                        MessageEntityMentionName, MessageEntityHashtag, MessageEntityCashtag,
-                        MessageEntityBotCommand, MessageEntityEmail, MessageEntityPhoneNumber,
-                        MessageEntitySpoiler, MessageEntityCustomEmoji, MessageEntityBlockquote
-                    )
-                    
+                    # Log the entities being preserved for debugging
+                    logger.info(f"Preserving {len(message.entities)} formatting entities for copying")
+                    premium_emoji_count = 0
                     for entity in message.entities:
-                        # Create a new entity instance to avoid reference issues
-                        entity_type = type(entity)
-                        
-                        # Handle each entity type properly
+                        entity_type = type(entity).__name__
                         if isinstance(entity, MessageEntityCustomEmoji):
-                            # Premium emoji - preserve document_id
-                            new_entity = MessageEntityCustomEmoji(
-                                offset=entity.offset,
-                                length=entity.length,
-                                document_id=entity.document_id
-                            )
-                            preserved_entities.append(new_entity)
-                            logger.debug(f"Preserved custom emoji: offset={entity.offset}, length={entity.length}, id={entity.document_id}")
-                            
-                        elif isinstance(entity, MessageEntityTextUrl):
-                            # Links with custom text [text](url)
-                            new_entity = MessageEntityTextUrl(
-                                offset=entity.offset,
-                                length=entity.length,
-                                url=entity.url
-                            )
-                            preserved_entities.append(new_entity)
-                            logger.debug(f"Preserved text URL: offset={entity.offset}, length={entity.length}, url={entity.url}")
-                            
-                        elif isinstance(entity, MessageEntityMentionName):
-                            # User mentions
-                            new_entity = MessageEntityMentionName(
-                                offset=entity.offset,
-                                length=entity.length,
-                                user_id=entity.user_id
-                            )
-                            preserved_entities.append(new_entity)
-                            logger.debug(f"Preserved mention: offset={entity.offset}, length={entity.length}, user_id={entity.user_id}")
-                            
-                        elif isinstance(entity, MessageEntityPre):
-                            # Code blocks with language
-                            new_entity = MessageEntityPre(
-                                offset=entity.offset,
-                                length=entity.length,
-                                language=getattr(entity, 'language', '')
-                            )
-                            preserved_entities.append(new_entity)
-                            logger.debug(f"Preserved pre/code block: offset={entity.offset}, length={entity.length}, language={getattr(entity, 'language', '')}")
-                            
+                            premium_emoji_count += 1
+                            logger.info(f"  - Premium Emoji: {entity_type} at offset {entity.offset}, length {entity.length}, ID: {entity.document_id}")
                         else:
-                            # All other simple formatting entities (bold, italic, etc.)
-                            new_entity = entity_type(
-                                offset=entity.offset,
-                                length=entity.length
+                            logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
+                    
+                    logger.info(f"Copying message with {premium_emoji_count} premium emojis and {len(message.entities) - premium_emoji_count} other formatting entities")
+                    
+                    # If the text still contains markdown syntax, parse it to get proper entities
+                    if needs_markdown_parse:
+                        try:
+                            # Parse the text with markdown to get proper formatting entities
+                            parsed_text, parsed_entities = self.parse_mode.parse(text_content)
+                            
+                            # Merge existing custom emoji entities with new formatting entities
+                            final_entities = []
+                            
+                            # Add custom emoji entities from the original message
+                            for entity in message.entities:
+                                if isinstance(entity, MessageEntityCustomEmoji):
+                                    final_entities.append(entity)
+                            
+                            # Add formatting entities from markdown parsing (but skip custom emojis to avoid duplicates)
+                            for entity in parsed_entities:
+                                if not isinstance(entity, MessageEntityCustomEmoji):
+                                    final_entities.append(entity)
+                            
+                            # Sort entities by offset to maintain proper order
+                            final_entities.sort(key=lambda e: e.offset)
+                            
+                            logger.info(f"Parsed markdown and merged entities: {len(final_entities)} total entities")
+                            
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=parsed_text,
+                                formatting_entities=final_entities,
+                                parse_mode=None,
+                                link_preview=False
                             )
-                            preserved_entities.append(new_entity)
-                            logger.debug(f"Preserved {entity_type.__name__}: offset={entity.offset}, length={entity.length}")
-                    
-                    # Sort entities by offset to maintain proper order
-                    preserved_entities.sort(key=lambda e: e.offset)
-                    
-                    logger.info(f"Copying message with {len(preserved_entities)} formatting entities preserved")
-                    
-                    # Count different entity types for detailed logging
-                    entity_counts = {}
-                    for entity in preserved_entities:
-                        entity_name = type(entity).__name__
-                        entity_counts[entity_name] = entity_counts.get(entity_name, 0) + 1
-                    
-                    logger.info(f"Entity breakdown: {dict(entity_counts)}")
-                    
-                    # Send message with all preserved formatting
-                    await self.client.send_message(
-                        entity=target_channel_id,
-                        message=text_content,
-                        formatting_entities=preserved_entities,
-                        parse_mode=None,  # Use raw entities to preserve everything exactly
-                        link_preview=False  # Disable link preview to avoid conflicts
-                    )
+                        except Exception as parse_error:
+                            logger.warning(f"Failed to parse markdown in copied message, using original entities: {parse_error}")
+                            # Fallback to original method
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=text_content,
+                                formatting_entities=message.entities,
+                                parse_mode=None,
+                                link_preview=False
+                            )
+                    else:
+                        # No markdown syntax detected, use entities as-is
+                        await self.client.send_message(
+                            entity=target_channel_id,
+                            message=text_content,
+                            formatting_entities=message.entities,
+                            parse_mode=None,
+                            link_preview=False
+                        )
                 else:
-                    # No formatting entities, send plain text
-                    logger.info("Copying plain text message (no formatting entities)")
-                    await self.client.send_message(
-                        entity=target_channel_id,
-                        message=text_content,
-                        parse_mode=None,
-                        link_preview=False
-                    )
+                    # No entities, but check if text has markdown that should be parsed
+                    if needs_markdown_parse:
+                        try:
+                            parsed_text, parsed_entities = self.parse_mode.parse(text_content)
+                            logger.info(f"Parsing markdown for text without entities: {len(parsed_entities)} entities found")
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=parsed_text,
+                                formatting_entities=parsed_entities,
+                                parse_mode=None
+                            )
+                        except Exception as parse_error:
+                            logger.warning(f"Failed to parse markdown, sending as plain text: {parse_error}")
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=text_content,
+                                parse_mode=None
+                            )
+                    else:
+                        # No entities and no markdown, send plain text
+                        logger.info("Copying plain text message (no formatting entities)")
+                        await self.client.send_message(
+                            entity=target_channel_id,
+                            message=text_content,
+                            parse_mode=None
+                        )
                     
             elif message.media:
-                # Media message (photo, video, document, etc.) with caption
+                # Media message (photo, video, document, etc.)
                 caption = message.text or message.message or ""
                 
-                # Preserve caption entities exactly as they are (same logic as text messages)
-                preserved_caption_entities = []
+                # Preserve caption entities exactly as they are
                 if message.entities and caption:
-                    from telethon.tl.types import (
-                        MessageEntityBold, MessageEntityItalic, MessageEntityUnderline,
-                        MessageEntityStrikethrough, MessageEntityCode, MessageEntityPre,
-                        MessageEntityTextUrl, MessageEntityUrl, MessageEntityMention,
-                        MessageEntityMentionName, MessageEntityHashtag, MessageEntityCashtag,
-                        MessageEntityBotCommand, MessageEntityEmail, MessageEntityPhoneNumber,
-                        MessageEntitySpoiler, MessageEntityCustomEmoji, MessageEntityBlockquote
-                    )
-                    
+                    # Log caption entities being preserved
+                    logger.debug(f"Preserving {len(message.entities)} caption entities")
                     for entity in message.entities:
-                        entity_type = type(entity)
-                        
-                        # Handle each caption entity type properly
-                        if isinstance(entity, MessageEntityCustomEmoji):
-                            new_entity = MessageEntityCustomEmoji(
-                                offset=entity.offset,
-                                length=entity.length,
-                                document_id=entity.document_id
-                            )
-                            preserved_caption_entities.append(new_entity)
-                            
-                        elif isinstance(entity, MessageEntityTextUrl):
-                            new_entity = MessageEntityTextUrl(
-                                offset=entity.offset,
-                                length=entity.length,
-                                url=entity.url
-                            )
-                            preserved_caption_entities.append(new_entity)
-                            
-                        elif isinstance(entity, MessageEntityMentionName):
-                            new_entity = MessageEntityMentionName(
-                                offset=entity.offset,
-                                length=entity.length,
-                                user_id=entity.user_id
-                            )
-                            preserved_caption_entities.append(new_entity)
-                            
-                        elif isinstance(entity, MessageEntityPre):
-                            new_entity = MessageEntityPre(
-                                offset=entity.offset,
-                                length=entity.length,
-                                language=getattr(entity, 'language', '')
-                            )
-                            preserved_caption_entities.append(new_entity)
-                            
-                        else:
-                            new_entity = entity_type(
-                                offset=entity.offset,
-                                length=entity.length
-                            )
-                            preserved_caption_entities.append(new_entity)
-                    
-                    # Sort caption entities by offset
-                    preserved_caption_entities.sort(key=lambda e: e.offset)
-                    
-                    logger.info(f"Copying media with {len(preserved_caption_entities)} caption formatting entities")
+                        entity_type = type(entity).__name__
+                        logger.debug(f"  - Caption {entity_type} at offset {entity.offset}, length {entity.length}")
                     
                     await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
                         caption=caption,
-                        formatting_entities=preserved_caption_entities,
+                        formatting_entities=message.entities,
                         parse_mode=None,  # Use raw entities to preserve everything exactly
                         supports_streaming=True  # Enable streaming for better performance
                     )
                 else:
-                    # Media without caption formatting
                     await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
                         caption=caption,
-                        parse_mode=None,
-                        supports_streaming=True
+                        parse_mode=None
                     )
             else:
                 # Handle other message types like stickers, animations, etc.
+                # These don't have text formatting but may have custom properties
                 if hasattr(message, 'sticker') and message.sticker:
                     # Copy sticker
                     await self.client.send_file(
@@ -633,7 +582,7 @@ class TelegramEmojiBot:
                     logger.warning(f"Unsupported message type for copying from {source_channel_id}: {type(message)}")
                     return
             
-            logger.info(f"Successfully copied message from {source_channel_id} to {target_channel_id} with complete formatting preservation")
+            logger.info(f"Copied message from {source_channel_id} to {target_channel_id} with complete formatting preservation")
             
         except Exception as copy_error:
             logger.error(f"Failed to copy message from {source_channel_id} to {target_channel_id}: {copy_error}")
@@ -641,8 +590,6 @@ class TelegramEmojiBot:
             logger.error(f"Message type: {type(message)}, Has text: {bool(message.text or message.message)}, Has media: {bool(message.media)}")
             if message.entities:
                 logger.error(f"Entities count: {len(message.entities)}")
-                for i, entity in enumerate(message.entities):
-                    logger.error(f"  Entity {i}: {type(entity).__name__} at offset {entity.offset}, length {entity.length}")
 
     async def load_admin_ids(self):
         """Load admin IDs from database into cache"""
