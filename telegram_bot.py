@@ -325,7 +325,15 @@ class TelegramEmojiBot:
         try:
             message_text = event.message.text.strip()
             chat_id = event.chat_id
-            logger.info(f"Handling private message: '{message_text}' from {chat_id}")
+            sender_id = event.sender_id
+            logger.info(f"Handling private message: '{message_text}' from {chat_id}, sender: {sender_id}")
+            
+            # Check if sender is admin
+            admin_id = 6602517122
+            if sender_id != admin_id:
+                logger.info(f"Unauthorized access attempt from user {sender_id}")
+                await event.reply("❌ غير مصرح لك باستخدام هذا البوت.")
+                return
             
             # Parse command and arguments
             parts = message_text.split(None, 1)
