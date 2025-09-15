@@ -579,7 +579,7 @@ class TelegramEmojiBot:
             logger.error(f"Failed to resolve channel identifier {channel_identifier}: {e}")
             return None, None, None
 
-    async def format_permissions_text(self, participant, channel_title: str, channel_username: str = None) -> str:
+    async def format_permissions_text(self, permissions, channel_title: str, channel_username: str = None) -> str:
         """Format permissions text for display"""
         try:
             username_display = f"@{channel_username}" if channel_username else "بدون معرف"
@@ -589,47 +589,46 @@ class TelegramEmojiBot:
 • المعرف: {username_display}
 
 👤 **حالة البوت:**
-• الدور: {"✅ مشرف" if participant.is_admin else "❌ عضو عادي"}
-• في القناة: {"✅ نعم" if participant.is_participant else "❌ لا"}
+• الدور: {"✅ مشرف" if permissions.is_admin else "❌ عضو عادي"}
 
 🔑 **الصلاحيات الحالية:**"""
             
-            if participant.is_admin:
+            if permissions.is_admin:
                 # Check specific admin permissions
-                permissions = []
+                perm_list = []
                 
-                if hasattr(participant, 'edit_messages') and participant.edit_messages:
-                    permissions.append("✅ تعديل الرسائل")
+                if hasattr(permissions, 'edit_messages') and permissions.edit_messages:
+                    perm_list.append("✅ تعديل الرسائل")
                 else:
-                    permissions.append("❌ تعديل الرسائل")
+                    perm_list.append("❌ تعديل الرسائل")
                 
-                if hasattr(participant, 'delete_messages') and participant.delete_messages:
-                    permissions.append("✅ حذف الرسائل")
+                if hasattr(permissions, 'delete_messages') and permissions.delete_messages:
+                    perm_list.append("✅ حذف الرسائل")
                 else:
-                    permissions.append("❌ حذف الرسائل")
+                    perm_list.append("❌ حذف الرسائل")
                 
-                if hasattr(participant, 'post_messages') and participant.post_messages:
-                    permissions.append("✅ إرسال الرسائل")
+                if hasattr(permissions, 'post_messages') and permissions.post_messages:
+                    perm_list.append("✅ إرسال الرسائل")
                 else:
-                    permissions.append("❌ إرسال الرسائل")
+                    perm_list.append("❌ إرسال الرسائل")
                 
-                if hasattr(participant, 'add_admins') and participant.add_admins:
-                    permissions.append("✅ إضافة مشرفين")
+                if hasattr(permissions, 'add_admins') and permissions.add_admins:
+                    perm_list.append("✅ إضافة مشرفين")
                 else:
-                    permissions.append("❌ إضافة مشرفين")
+                    perm_list.append("❌ إضافة مشرفين")
                 
-                if hasattr(participant, 'ban_users') and participant.ban_users:
-                    permissions.append("✅ حظر المستخدمين")
+                if hasattr(permissions, 'ban_users') and permissions.ban_users:
+                    perm_list.append("✅ حظر المستخدمين")
                 else:
-                    permissions.append("❌ حظر المستخدمين")
+                    perm_list.append("❌ حظر المستخدمين")
                 
                 # Add permissions to text
-                for perm in permissions:
+                for perm in perm_list:
                     permissions_text += f"\n• {perm}"
                 
                 # Check if critical permissions are missing
                 critical_missing = []
-                if not (hasattr(participant, 'edit_messages') and participant.edit_messages):
+                if not (hasattr(permissions, 'edit_messages') and permissions.edit_messages):
                     critical_missing.append("تعديل الرسائل")
                 
                 if critical_missing:
