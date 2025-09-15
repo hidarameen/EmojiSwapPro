@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-emoji-bot
+    restart: unless-stopped
+    environment:
+      # Telegram Bot Configuration
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - SESSION_STRING=${SESSION_STRING}
+      
+      # Database Configuration
+      - DATABASE_URL=${DATABASE_URL}
+      
+      # Optional: Logging level
+      - LOG_LEVEL=INFO
+      
+      # Optional: Environment
+      - ENVIRONMENT=production
+      
+      # Optional: Sentry for error monitoring
+      - SENTRY_DSN=${SENTRY_DSN}
+      
+    volumes:
+      # Mount logs directory
+      - ./logs:/app/logs:rw
+      
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+    
+    # Network configuration
+    networks:
+      - bot-network
+
+  # Optional: PostgreSQL database (if not using external service)
+  # Uncomment if you need a local database for development
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: telegram-bot-db
+  #   restart: unless-stopped
+  #   environment:
+  #     - POSTGRES_DB=telegram_bot
+  #     - POSTGRES_USER=botuser
+  #     - POSTGRES_PASSWORD=${DB_PASSWORD}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
+
+# volumes:
+#   postgres_data:

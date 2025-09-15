@@ -1,0 +1,64 @@
+{
+  "name": "telegram-emoji-bot",
+  "description": "Telegram bot for emoji replacement and message routing with premium emoji support",
+  "build": {
+    "type": "dockerfile",
+    "dockerfile": "Dockerfile"
+  },
+  "environment": {
+    "required": [
+      {
+        "name": "API_ID",
+        "description": "Telegram API ID from my.telegram.org"
+      },
+      {
+        "name": "API_HASH", 
+        "description": "Telegram API Hash from my.telegram.org"
+      },
+      {
+        "name": "SESSION_STRING",
+        "description": "Telethon session string generated using generate_session.py"
+      },
+      {
+        "name": "DATABASE_URL",
+        "description": "PostgreSQL database connection URL"
+      }
+    ],
+    "optional": [
+      {
+        "name": "LOG_LEVEL",
+        "description": "Logging level (DEBUG, INFO, WARNING, ERROR)",
+        "default": "INFO"
+      },
+      {
+        "name": "ENVIRONMENT", 
+        "description": "Environment name (development, staging, production)",
+        "default": "production"
+      },
+      {
+        "name": "SENTRY_DSN",
+        "description": "Sentry DSN for error monitoring (optional)"
+      }
+    ]
+  },
+  "resources": {
+    "memory": "512Mi",
+    "cpu": "0.2",
+    "replicas": 1
+  },
+  "networking": {
+    "internal": true
+  },
+  "healthcheck": {
+    "enabled": true,
+    "path": "/health",
+    "port": 8080,
+    "interval": 60,
+    "timeout": 30
+  },
+  "deployment": {
+    "strategy": "rolling",
+    "maxUnavailable": 0,
+    "maxSurge": 1
+  }
+}

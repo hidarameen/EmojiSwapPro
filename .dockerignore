@@ -1,0 +1,80 @@
+# Python cache and temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log
+logs/
+telegram_bot.log
+
+# Session files (should be created in container with environment variables)
+*.session
+*.session-journal
+
+# Documentation
+README.md
+*.md
+
+# Docker files (not needed in container)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Development files
+test_*.py
+*_test.py
+tests/
+
+# Replit specific
+.replit
+replit.nix
+pyproject.toml
+uv.lock
+replit.md
+
+# Control bot (if not needed in production)
+control_bot.py
+run_control_bot.py
+requirements_control.txt
