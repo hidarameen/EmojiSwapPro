@@ -468,7 +468,7 @@ class TelegramEmojiBot:
 
     def extract_emojis_from_text(self, text: str) -> List[str]:
         """Extract all unique emojis from text using regex - handles consecutive emojis"""
-        # Unicode emoji regex pattern - removed '+' to match single emoji at a time
+        # Comprehensive Unicode emoji regex pattern
         emoji_pattern = re.compile(
             "["
             "\U0001F600-\U0001F64F"  # emoticons
@@ -478,12 +478,40 @@ class TelegramEmojiBot:
             "\U00002700-\U000027BF"  # dingbats
             "\U0001F900-\U0001F9FF"  # supplemental symbols
             "\U00002600-\U000026FF"  # miscellaneous symbols
-            "\U0001F170-\U0001F251"
-            "]", flags=re.UNICODE  # Removed '+' to match individual emojis
+            "\U0001F170-\U0001F251"  # enclosed characters
+            "\U00002190-\U000021FF"  # arrows
+            "\U00002000-\U0000206F"  # general punctuation
+            "\U00002070-\U0000209F"  # superscripts and subscripts
+            "\U000020A0-\U000020CF"  # currency symbols
+            "\U000020D0-\U000020FF"  # combining diacritical marks for symbols
+            "\U00002100-\U0000214F"  # letterlike symbols
+            "\U00002150-\U0000218F"  # number forms
+            "\U00002460-\U000024FF"  # enclosed alphanumerics
+            "\U000025A0-\U000025FF"  # geometric shapes
+            "\U00002B00-\U00002BFF"  # miscellaneous symbols and arrows
+            "\U0000FE00-\U0000FE0F"  # variation selectors
+            "\U0001F004"             # mahjong tile red dragon
+            "\U0001F0CF"             # playing card black joker
+            "\U0001F18E"             # negative squared ab
+            "\U0001F191-\U0001F19A"  # squared symbols
+            "\U0001F1E6-\U0001F1FF"  # regional indicator symbols
+            "\U0001F201-\U0001F202"  # squared symbols
+            "\U0001F21A"             # squared cjk unified ideograph-7121
+            "\U0001F22F"             # squared cjk unified ideograph-6307
+            "\U0001F232-\U0001F23A"  # squared symbols
+            "\U0001F250-\U0001F251"  # circled symbols
+            "]", flags=re.UNICODE
         )
+        
+        # Debug: Print Unicode codepoints for each character
+        logger.info(f"Text analysis for: '{text}'")
+        for i, char in enumerate(text):
+            unicode_point = ord(char)
+            logger.info(f"  Char {i}: '{char}' -> U+{unicode_point:04X}")
         
         # Get all individual emojis found in text
         found_emojis = emoji_pattern.findall(text)
+        logger.info(f"Regex found emojis: {found_emojis}")
         
         # Return unique emojis while preserving order
         unique_emojis = []
@@ -493,6 +521,7 @@ class TelegramEmojiBot:
                 unique_emojis.append(emoji)
                 seen.add(emoji)
         
+        logger.info(f"Final unique emojis: {unique_emojis}")
         return unique_emojis
 
     async def replace_emojis_in_message(self, event):
