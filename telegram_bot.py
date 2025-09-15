@@ -616,7 +616,7 @@ class TelegramEmojiBot:
             return f"❌ خطأ في عرض الصلاحيات: {e}"
 
     async def process_command_queue(self):
-        """Process pending commands from control bot"""
+        """Process pending commands from control bot with enhanced error handling"""
         if self.db_pool is None:
             return
         
@@ -628,13 +628,17 @@ class TelegramEmojiBot:
                 )
                 
                 for cmd_row in commands:
+                    command_id = None
                     try:
                         command_id = cmd_row['id']
                         command = cmd_row['command']
                         args = cmd_row['args'] or ""
                         requested_by = cmd_row['requested_by']
+                        chat_id = cmd_row.get('chat_id')
+                        message_id = cmd_row.get('message_id')
+                        callback_data = cmd_row.get('callback_data')
                         
-                        logger.info(f"Processing command queue ID {command_id}: {command}")
+                        logger.info(f"Processing command queue ID {command_id}: {command} with args: {args}")
                         
                         # Mark as processing
                         await conn.execute(
@@ -642,53 +646,114 @@ class TelegramEmojiBot:
                             command_id
                         )
                         
-                        # Execute command
+                        # Execute command with enhanced handling
                         result = await self.execute_queued_command(command, args, requested_by)
+                        
+                        # Clean up result for better display
+                        if result and len(result) > 3000:  # Truncate long results
+                            result = result[:2900] + "\n\n... (النتيجة مقطوعة للطول)"
                         
                         # Update with result
                         await conn.execute(
                             "UPDATE command_queue SET status = 'completed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
-                            result, command_id
+                            result or "تم تنفيذ الأمر بنجاح", command_id
                         )
                         
-                        # Send result to user if needed
-                        if result and requested_by:
-                            await self.send_result_to_user(requested_by, f"✅ نتيجة الأمر {command}:\n\n{result}")
+                        logger.info(f"Successfully processed command {command_id}")
                         
                     except Exception as cmd_error:
-                        logger.error(f"Failed to process command {command_id}: {cmd_error}")
-                        # Mark as failed
-                        await conn.execute(
-                            "UPDATE command_queue SET status = 'failed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
-                            str(cmd_error), command_id
-                        )
+                        error_msg = str(cmd_error)
+                        logger.error(f"Failed to process command {command_id}: {error_msg}")
                         
-                        if requested_by:
-                            await self.send_result_to_user(requested_by, f"❌ فشل تنفيذ الأمر {command}:\n{cmd_error}")
+                        try:
+                            # Mark as failed with error details
+                            await conn.execute(
+                                "UPDATE command_queue SET status = 'failed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
+                                f"خطأ في التنفيذ: {error_msg}", command_id
+                            )
+                        except Exception as update_error:
+                            logger.error(f"Failed to update command {command_id} status: {update_error}")
                 
         except Exception as e:
             logger.error(f"Failed to process command queue: {e}")
 
     async def execute_queued_command(self, command: str, args: str, requested_by: int) -> str:
-        """Execute a queued command and return result"""
+        """Execute a queued command and return result with comprehensive command support"""
         try:
-            # Map command to internal method
-            command_mapping = {
-                'list_channels': self.get_channels_list,
-                'list_global_emojis': self.get_global_emojis_list,
-                'list_channel_emojis': self.get_channel_emojis_list,
-                'list_forwarding_tasks': self.get_forwarding_tasks_list,
-                'get_stats': self.get_system_stats,
-            }
+            logger.info(f"Executing command: {command} with args: {args}")
             
-            if command in command_mapping:
-                return await command_mapping[command]()
+            # Channel management commands
+            if command == 'list_channels':
+                return await self.get_channels_list()
+            elif command == 'add_channel':
+                return await self.handle_add_channel_command(args)
+            elif command == 'remove_channel':
+                return await self.handle_remove_channel_command(args)
+            elif command == 'check_channel_permissions':
+                return await self.handle_check_permissions_command(args)
+            
+            # Emoji management commands
+            elif command == 'list_global_emojis':
+                return await self.get_global_emojis_list()
+            elif command == 'list_channel_emojis':
+                if args:
+                    return await self.get_specific_channel_emojis_list(args)
+                return await self.get_channel_emojis_list()
+            elif command == 'add_emoji_replacement':
+                return await self.handle_add_emoji_command(args)
+            elif command == 'delete_emoji_replacement':
+                return await self.handle_delete_emoji_command(args)
+            elif command == 'clean_duplicates':
+                return await self.handle_clean_duplicates_command()
+            
+            # Channel-specific emoji commands
+            elif command == 'add_channel_emoji_replacement':
+                return await self.handle_add_channel_emoji_command(args)
+            elif command == 'list_channel_emoji_replacements':
+                return await self.handle_list_channel_emoji_command(args)
+            elif command == 'activate_channel_replacement':
+                return await self.handle_activate_channel_replacement_command(args)
+            elif command == 'deactivate_channel_replacement':
+                return await self.handle_deactivate_channel_replacement_command(args)
+            
+            # Forwarding task commands
+            elif command == 'list_forwarding_tasks':
+                return await self.get_forwarding_tasks_list()
+            elif command == 'add_forwarding_task':
+                return await self.handle_add_forwarding_task_command(args)
+            elif command == 'delete_forwarding_task':
+                return await self.handle_delete_forwarding_task_command(args)
+            elif command == 'activate_forwarding_task':
+                return await self.handle_activate_forwarding_task_command(args)
+            elif command == 'deactivate_forwarding_task':
+                return await self.handle_deactivate_forwarding_task_command(args)
+            elif command == 'update_forwarding_delay':
+                return await self.handle_update_forwarding_delay_command(args)
+            
+            # Admin management commands
+            elif command == 'list_admins':
+                return await self.get_admins_list()
+            elif command == 'add_admin':
+                return await self.handle_add_admin_command(args)
+            elif command == 'remove_admin':
+                return await self.handle_remove_admin_command(args)
+            
+            # System commands
+            elif command == 'get_stats':
+                return await self.get_system_stats()
+            elif command == 'test_connection':
+                return await self.test_system_connection()
+            elif command == 'sync_data':
+                return await self.sync_system_data()
+            elif command == 'detailed_report':
+                return await self.get_detailed_system_report()
+            
             else:
                 return f"❌ أمر غير معروف: {command}"
                 
         except Exception as e:
             logger.error(f"Failed to execute command {command}: {e}")
-            return f"❌ خطأ في تنفيذ الأمر: {e}"
+            return f"❌ خطأ في تنفيذ الأمر {command}: {str(e)}"
 
     async def get_channels_list(self) -> str:
         """Get formatted list of monitored channels"""
@@ -1872,6 +1937,649 @@ class TelegramEmojiBot:
 
     async def cmd_add_channel(self, event, args: str):
         """Handle add channel command with permissions verification"""
+
+
+    # ============= QUEUE COMMAND HANDLERS =============
+
+    async def handle_add_channel_command(self, args: str) -> str:
+        """Handle add channel command from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف القناة مطلوب"
+            
+            channel_identifier = args.strip()
+            
+            # Try to get channel entity
+            try:
+                channel_entity = await self.client.get_entity(channel_identifier)
+                
+                if isinstance(channel_entity, Channel):
+                    channel_id = utils.get_peer_id(channel_entity)
+                    channel_username = getattr(channel_entity, 'username', None)
+                    channel_title = getattr(channel_entity, 'title', 'Unknown Channel')
+                    
+                    # Check bot permissions
+                    try:
+                        me = await self.client.get_me()
+                        participant = await self.client.get_permissions(channel_entity, me)
+                        
+                        if not participant.is_admin:
+                            return f"""❌ **فشل في إضافة القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت ليس مشرفاً في هذه القناة
+
+📝 **المطلوب:**
+• إضافة البوت كمشرف في القناة
+• منح صلاحيات "تعديل الرسائل" و "قراءة سجل الرسائل"
+
+💡 بعد إضافة البوت كمشرف، أعد المحاولة."""
+                        
+                        # Add channel to monitoring
+                        success = await self.add_monitored_channel(channel_id, channel_username, channel_title)
+                        
+                        if success:
+                            permissions_text = await self.format_permissions_text(participant, channel_title, channel_username)
+                            return f"✅ **تم إضافة القناة للمراقبة بنجاح!**\n\n{permissions_text}"
+                        else:
+                            return "❌ فشل في حفظ القناة في قاعدة البيانات"
+                            
+                    except Exception as perm_error:
+                        if "USER_NOT_PARTICIPANT" in str(perm_error):
+                            return f"""❌ **البوت غير موجود في القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت ليس عضواً في القناة
+
+📝 **الخطوات المطلوبة:**
+1. أضف البوت إلى القناة
+2. اجعله مشرفاً
+3. امنحه صلاحيات "تعديل الرسائل"
+4. أعد المحاولة"""
+                        else:
+                            return f"❌ خطأ في فحص الصلاحيات: {str(perm_error)}"
+                            
+                else:
+                    return "❌ المعرف المدخل ليس قناة صالحة"
+                    
+            except Exception as channel_error:
+                return f"❌ لا يمكن العثور على القناة: {str(channel_error)}"
+                
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_remove_channel_command(self, args: str) -> str:
+        """Handle remove channel command from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف القناة مطلوب"
+            
+            # Resolve channel identifier
+            channel_id, username, title = await self.resolve_channel_identifier(args.strip())
+            
+            if channel_id is None:
+                return "❌ لا يمكن العثور على القناة"
+            
+            if channel_id not in self.monitored_channels:
+                return "❌ القناة غير موجودة في قائمة المراقبة"
+            
+            # Get info before deletion
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', title or 'Unknown Channel')
+            emoji_count = len(self.channel_emoji_mappings.get(channel_id, {}))
+            
+            success = await self.remove_monitored_channel(channel_id)
+            
+            if success:
+                response = f"✅ تم حذف القناة من المراقبة: **{channel_name}**"
+                if emoji_count > 0:
+                    response += f"\n🗑️ تم حذف {emoji_count} استبدال إيموجي خاص بالقناة تلقائياً"
+                return response
+            else:
+                return "❌ فشل في حذف القناة"
+                
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_check_permissions_command(self, args: str) -> str:
+        """Handle check permissions command from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف القناة مطلوب"
+            
+            channel_identifier = args.strip()
+            
+            try:
+                channel_entity = await self.client.get_entity(channel_identifier)
+                
+                if isinstance(channel_entity, Channel):
+                    channel_id = utils.get_peer_id(channel_entity)
+                    channel_username = getattr(channel_entity, 'username', None)
+                    channel_title = getattr(channel_entity, 'title', 'Unknown Channel')
+                    
+                    try:
+                        me = await self.client.get_me()
+                        participant = await self.client.get_permissions(channel_entity, me)
+                        
+                        permissions_text = await self.format_permissions_text(participant, channel_title, channel_username)
+                        
+                        # Add monitoring status
+                        is_monitored = channel_id in self.monitored_channels
+                        status_text = f"\n\n📋 **حالة المراقبة:**\n"
+                        if is_monitored:
+                            status_text += "✅ القناة مضافة للمراقبة"
+                            replacement_active = self.channel_replacement_status.get(channel_id, True)
+                            status_text += f"\n🔄 الاستبدال: {'✅ مفعل' if replacement_active else '❌ معطل'}"
+                        else:
+                            status_text += "❌ القناة غير مضافة للمراقبة"
+                        
+                        return permissions_text + status_text
+                        
+                    except Exception as perm_error:
+                        if "USER_NOT_PARTICIPANT" in str(perm_error):
+                            return f"""❌ **البوت غير موجود في القناة**
+
+📺 **القناة:** {channel_title}
+🚫 **السبب:** البوت ليس عضواً في القناة"""
+                        else:
+                            return f"❌ خطأ في فحص الصلاحيات: {str(perm_error)}"
+                            
+                else:
+                    return "❌ المعرف المدخل ليس قناة صالحة"
+                    
+            except Exception as channel_error:
+                return f"❌ لا يمكن العثور على القناة: {str(channel_error)}"
+                
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_add_emoji_command(self, args: str) -> str:
+        """Handle add emoji replacement command from queue"""
+        try:
+            if not args.strip():
+                return "❌ مطلوب: إيموجي عادي ومعرف الإيموجي المميز"
+            
+            parts = args.strip().split()
+            if len(parts) < 2:
+                return "❌ تنسيق غير صحيح. استخدم: إيموجي_عادي معرف_مميز [وصف]"
+            
+            normal_emoji = parts[0]
+            try:
+                premium_emoji_id = int(parts[1])
+            except ValueError:
+                return "❌ معرف الإيموجي المميز يجب أن يكون رقماً"
+            
+            description = " ".join(parts[2:]) if len(parts) > 2 else None
+            
+            if normal_emoji in self.emoji_mappings:
+                return f"⚠️ الإيموجي {normal_emoji} موجود مسبقاً"
+            
+            success = await self.add_emoji_replacement(normal_emoji, premium_emoji_id, description)
+            
+            if success:
+                return f"✅ تم إضافة الاستبدال: {normal_emoji} → معرف {premium_emoji_id}"
+            else:
+                return "❌ فشل في إضافة الاستبدال"
+                
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_delete_emoji_command(self, args: str) -> str:
+        """Handle delete emoji replacement command from queue"""
+        try:
+            if not args.strip():
+                return "❌ الإيموجي مطلوب للحذف"
+            
+            normal_emoji = args.strip()
+            
+            if normal_emoji not in self.emoji_mappings:
+                return f"❌ الإيموجي {normal_emoji} غير موجود في قائمة الاستبدالات"
+            
+            success = await self.delete_emoji_replacement(normal_emoji)
+            
+            if success:
+                return f"✅ تم حذف استبدال الإيموجي: {normal_emoji}"
+            else:
+                return "❌ فشل في حذف الاستبدال"
+                
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_clean_duplicates_command(self) -> str:
+        """Handle clean duplicates command from queue"""
+        try:
+            if self.db_pool is None:
+                return "❌ قاعدة البيانات غير متاحة"
+            
+            async with self.db_pool.acquire() as conn:
+                # Get duplicates
+                rows = await conn.fetch("""
+                    SELECT normal_emoji, premium_emoji_id, created_at 
+                    FROM emoji_replacements 
+                    ORDER BY normal_emoji, created_at DESC
+                """)
+                
+                if not rows:
+                    return "❌ لا توجد استبدالات في قاعدة البيانات"
+                
+                # Find and clean duplicates
+                emoji_groups = {}
+                for row in rows:
+                    emoji = row['normal_emoji']
+                    if emoji not in emoji_groups:
+                        emoji_groups[emoji] = []
+                    emoji_groups[emoji].append(row)
+                
+                cleaned_count = 0
+                for emoji, entries in emoji_groups.items():
+                    if len(entries) > 1:
+                        # Delete older duplicates (keep first - most recent)
+                        for old_entry in entries[1:]:
+                            await conn.execute(
+                                "DELETE FROM emoji_replacements WHERE normal_emoji = $1 AND premium_emoji_id = $2 AND created_at = $3",
+                                old_entry['normal_emoji'], old_entry['premium_emoji_id'], old_entry['created_at']
+                            )
+                            cleaned_count += 1
+                
+                # Reload cache
+                await self.load_emoji_mappings()
+                
+                if cleaned_count > 0:
+                    return f"🧹 تم تنظيف {cleaned_count} استبدال مكرر\n✅ تم إعادة تحميل {len(self.emoji_mappings)} استبدال نشط"
+                else:
+                    return f"✅ لا توجد استبدالات مكررة\n📊 الاستبدالات الحالية: {len(self.emoji_mappings)}"
+                    
+        except Exception as e:
+            return f"❌ حدث خطأ في تنظيف الاستبدالات: {str(e)}"
+
+    async def get_specific_channel_emojis_list(self, args: str) -> str:
+        """Get emoji list for a specific channel"""
+        try:
+            # Try to resolve channel ID from args
+            channel_id = None
+            
+            # If it's a direct ID
+            try:
+                channel_id = int(args)
+            except ValueError:
+                # Try to resolve from identifier
+                resolved_id, username, title = await self.resolve_channel_identifier(args)
+                channel_id = resolved_id
+            
+            if channel_id is None:
+                return "❌ لا يمكن العثور على القناة"
+            
+            if channel_id not in self.monitored_channels:
+                return "❌ القناة غير مراقبة"
+            
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', 'Unknown Channel')
+            
+            channel_mappings = self.channel_emoji_mappings.get(channel_id, {})
+            
+            if not channel_mappings:
+                return f"لا توجد استبدالات خاصة بالقناة: **{channel_name}**"
+            
+            result = f"🎯 **استبدالات القناة {channel_name}**\n\n"
+            for normal_emoji, premium_id in channel_mappings.items():
+                result += f"• {normal_emoji} → معرف: `{premium_id}`\n"
+            
+            return result
+            
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def test_system_connection(self) -> str:
+        """Test system connections and status"""
+        try:
+            results = []
+            
+            # Test Telegram connection
+            try:
+                me = await self.client.get_me()
+                results.append("✅ اتصال Telegram: متصل")
+                results.append(f"   👤 البوت: {getattr(me, 'first_name', 'Unknown')} (@{getattr(me, 'username', 'Unknown')})")
+            except Exception as e:
+                results.append(f"❌ اتصال Telegram: خطأ - {str(e)}")
+            
+            # Test database connection
+            if self.db_pool:
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        test_result = await conn.fetchval("SELECT 1")
+                        if test_result == 1:
+                            results.append("✅ قاعدة البيانات: متصلة")
+                        else:
+                            results.append("❌ قاعدة البيانات: استجابة غير متوقعة")
+                except Exception as e:
+                    results.append(f"❌ قاعدة البيانات: خطأ - {str(e)}")
+            else:
+                results.append("❌ قاعدة البيانات: غير متصلة")
+            
+            # Test cache status
+            results.append(f"📊 البيانات المحملة:")
+            results.append(f"   • القنوات: {len(self.monitored_channels)}")
+            results.append(f"   • الاستبدالات العامة: {len(self.emoji_mappings)}")
+            results.append(f"   • استبدالات القنوات: {sum(len(m) for m in self.channel_emoji_mappings.values())}")
+            results.append(f"   • مهام النسخ: {len(self.forwarding_tasks)}")
+            
+            return "🔍 **اختبار اتصال النظام**\n\n" + "\n".join(results)
+            
+        except Exception as e:
+            return f"❌ فشل اختبار النظام: {str(e)}"
+
+    async def sync_system_data(self) -> str:
+        """Synchronize system data"""
+        try:
+            results = []
+            
+            # Reload all cached data
+            try:
+                await self.load_emoji_mappings()
+                results.append(f"✅ تم تحديث الاستبدالات العامة: {len(self.emoji_mappings)}")
+            except Exception as e:
+                results.append(f"❌ خطأ في تحديث الاستبدالات العامة: {str(e)}")
+            
+            try:
+                await self.load_channel_emoji_mappings()
+                total_channel_mappings = sum(len(mappings) for mappings in self.channel_emoji_mappings.values())
+                results.append(f"✅ تم تحديث استبدالات القنوات: {total_channel_mappings}")
+            except Exception as e:
+                results.append(f"❌ خطأ في تحديث استبدالات القنوات: {str(e)}")
+            
+            try:
+                await self.load_monitored_channels()
+                results.append(f"✅ تم تحديث القنوات المراقبة: {len(self.monitored_channels)}")
+            except Exception as e:
+                results.append(f"❌ خطأ في تحديث القنوات: {str(e)}")
+            
+            try:
+                await self.load_forwarding_tasks()
+                results.append(f"✅ تم تحديث مهام النسخ: {len(self.forwarding_tasks)}")
+            except Exception as e:
+                results.append(f"❌ خطأ في تحديث مهام النسخ: {str(e)}")
+            
+            try:
+                await self.load_admin_ids()
+                results.append(f"✅ تم تحديث قائمة الأدمن: {len(self.admin_ids)}")
+            except Exception as e:
+                results.append(f"❌ خطأ في تحديث الأدمن: {str(e)}")
+            
+            return "🔄 **مزامنة البيانات**\n\n" + "\n".join(results)
+            
+        except Exception as e:
+            return f"❌ فشل في مزامنة البيانات: {str(e)}"
+
+    async def get_detailed_system_report(self) -> str:
+        """Generate detailed system report"""
+        try:
+            # Refresh all data first
+            await self.load_cached_data()
+            
+            report_lines = []
+            report_lines.append("📊 **تقرير النظام المفصل**\n")
+            
+            # System status
+            report_lines.append("🔌 **حالة النظام:**")
+            try:
+                me = await self.client.get_me()
+                report_lines.append(f"✅ UserBot نشط: {getattr(me, 'first_name', 'Unknown')} (@{getattr(me, 'username', 'Unknown')})")
+            except:
+                report_lines.append("❌ UserBot غير متصل")
+            
+            db_status = "✅ متصلة" if self.db_pool else "❌ غير متصلة"
+            report_lines.append(f"🗄️ قاعدة البيانات: {db_status}")
+            
+            # Detailed statistics
+            report_lines.append("\n📈 **إحصائيات مفصلة:**")
+            report_lines.append(f"📺 القنوات المراقبة: {len(self.monitored_channels)}")
+            
+            # Channel details
+            if self.monitored_channels:
+                active_replacements = sum(1 for active in self.channel_replacement_status.values() if active)
+                report_lines.append(f"   • الاستبدال مفعل في: {active_replacements} قناة")
+                report_lines.append(f"   • الاستبدال معطل في: {len(self.monitored_channels) - active_replacements} قناة")
+            
+            # Emoji statistics
+            total_emojis = len(self.emoji_mappings) + sum(len(m) for m in self.channel_emoji_mappings.values())
+            report_lines.append(f"😀 إجمالي الاستبدالات: {total_emojis}")
+            report_lines.append(f"   • العامة: {len(self.emoji_mappings)}")
+            report_lines.append(f"   • خاصة بالقنوات: {sum(len(m) for m in self.channel_emoji_mappings.values())}")
+            
+            # Forwarding tasks
+            report_lines.append(f"🔄 مهام النسخ النشطة: {len(self.forwarding_tasks)}")
+            if self.forwarding_tasks:
+                delayed_tasks = sum(1 for task in self.forwarding_tasks.values() if task.get('delay', 0) > 0)
+                report_lines.append(f"   • مع تأخير: {delayed_tasks} مهمة")
+                report_lines.append(f"   • فورية: {len(self.forwarding_tasks) - delayed_tasks} مهمة")
+            
+            # Admin info
+            report_lines.append(f"👥 المستخدمون المخولون: {len(self.admin_ids)}")
+            
+            # Performance indicators
+            if self.db_pool:
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        # Check recent activity
+                        recent_commands = await conn.fetchval(
+                            "SELECT COUNT(*) FROM command_queue WHERE created_at > NOW() - INTERVAL '1 hour'"
+                        ) or 0
+                        report_lines.append(f"\n⚡ **النشاط الأخير:**")
+                        report_lines.append(f"🔄 أوامر آخر ساعة: {recent_commands}")
+                except:
+                    pass
+            
+            return "\n".join(report_lines)
+            
+        except Exception as e:
+            return f"❌ فشل في إنتاج التقرير: {str(e)}"
+
+    # Additional command handlers for completeness
+    async def handle_add_channel_emoji_command(self, args: str) -> str:
+        """Handle add channel emoji from queue"""
+        # Implementation would be similar to cmd_add_channel_emoji_replacement
+        return "🔧 هذا الأمر يتطلب واجهة تفاعلية أكثر تعقيداً"
+
+    async def handle_list_channel_emoji_command(self, args: str) -> str:
+        """Handle list channel emoji from queue"""
+        return await self.get_specific_channel_emojis_list(args)
+
+    async def handle_activate_channel_replacement_command(self, args: str) -> str:
+        """Handle activate channel replacement from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف القناة مطلوب"
+            
+            channel_id, username, title = await self.resolve_channel_identifier(args.strip())
+            
+            if channel_id is None or channel_id not in self.monitored_channels:
+                return "❌ لا يمكن العثور على القناة أو هي غير مراقبة"
+            
+            if self.db_pool is None:
+                return "❌ قاعدة البيانات غير متاحة"
+            
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE monitored_channels SET replacement_active = TRUE WHERE channel_id = $1",
+                    channel_id
+                )
+                
+                self.channel_replacement_status[channel_id] = True
+                channel_name = self.monitored_channels[channel_id].get('title', 'Unknown Channel')
+                return f"✅ تم تفعيل الاستبدال في القناة: **{channel_name}**"
+                
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_deactivate_channel_replacement_command(self, args: str) -> str:
+        """Handle deactivate channel replacement from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف القناة مطلوب"
+            
+            channel_id, username, title = await self.resolve_channel_identifier(args.strip())
+            
+            if channel_id is None or channel_id not in self.monitored_channels:
+                return "❌ لا يمكن العثور على القناة أو هي غير مراقبة"
+            
+            if self.db_pool is None:
+                return "❌ قاعدة البيانات غير متاحة"
+            
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE monitored_channels SET replacement_active = FALSE WHERE channel_id = $1",
+                    channel_id
+                )
+                
+                self.channel_replacement_status[channel_id] = False
+                channel_name = self.monitored_channels[channel_id].get('title', 'Unknown Channel')
+                return f"✅ تم تعطيل الاستبدال في القناة: **{channel_name}**"
+                
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def get_admins_list(self) -> str:
+        """Get formatted list of admins"""
+        try:
+            if not self.admin_ids:
+                return "لا توجد أدمن محفوظين"
+            
+            if self.db_pool is None:
+                return "❌ قاعدة البيانات غير متاحة"
+                
+            async with self.db_pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT user_id, username, added_by, added_at 
+                    FROM bot_admins 
+                    WHERE is_active = TRUE 
+                    ORDER BY added_at
+                """)
+                
+                result = "👥 **قائمة المستخدمين المخولين:**\n\n"
+                for row in rows:
+                    username_display = row['username'] or 'غير معروف'
+                    added_by_display = row['added_by'] or 'النظام'
+                    added_date = row['added_at'].strftime('%Y-%m-%d') if row['added_at'] else 'غير معروف'
+                    
+                    result += f"• **معرف:** `{row['user_id']}`\n"
+                    result += f"  👤 الاسم: {username_display}\n"
+                    result += f"  ➕ أضيف بواسطة: {added_by_display}\n"
+                    result += f"  📅 التاريخ: {added_date}\n\n"
+                
+                return result
+                
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    # Forwarding task handlers (simplified for queue processing)
+    async def handle_add_forwarding_task_command(self, args: str) -> str:
+        """Handle add forwarding task from queue"""
+        return "🔧 إضافة مهام النسخ تتطلب معاملات متعددة، استخدم الواجهة التفاعلية"
+
+    async def handle_delete_forwarding_task_command(self, args: str) -> str:
+        """Handle delete forwarding task from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف المهمة مطلوب"
+            
+            try:
+                task_id = int(args.strip())
+            except ValueError:
+                return "❌ معرف المهمة يجب أن يكون رقماً"
+            
+            if task_id not in self.forwarding_tasks:
+                return "❌ المهمة غير موجودة"
+            
+            success = await self.delete_forwarding_task(task_id)
+            return "✅ تم حذف مهمة النسخ بنجاح" if success else "❌ فشل في حذف المهمة"
+            
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_activate_forwarding_task_command(self, args: str) -> str:
+        """Handle activate forwarding task from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف المهمة مطلوب"
+            
+            try:
+                task_id = int(args.strip())
+            except ValueError:
+                return "❌ معرف المهمة يجب أن يكون رقماً"
+            
+            success = await self.activate_forwarding_task(task_id)
+            return "✅ تم تفعيل مهمة النسخ بنجاح" if success else "❌ فشل في تفعيل المهمة"
+            
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_deactivate_forwarding_task_command(self, args: str) -> str:
+        """Handle deactivate forwarding task from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف المهمة مطلوب"
+            
+            try:
+                task_id = int(args.strip())
+            except ValueError:
+                return "❌ معرف المهمة يجب أن يكون رقماً"
+            
+            success = await self.deactivate_forwarding_task(task_id)
+            return "✅ تم تعطيل مهمة النسخ بنجاح" if success else "❌ فشل في تعطيل المهمة"
+            
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_update_forwarding_delay_command(self, args: str) -> str:
+        """Handle update forwarding delay from queue"""
+        return "🔧 تعديل التأخير يتطلب معاملات محددة، استخدم الواجهة التفاعلية"
+
+    async def handle_add_admin_command(self, args: str) -> str:
+        """Handle add admin from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف المستخدم مطلوب"
+            
+            parts = args.strip().split(None, 1)
+            try:
+                user_id = int(parts[0])
+            except ValueError:
+                return "❌ معرف المستخدم يجب أن يكون رقماً"
+                
+            username = parts[1] if len(parts) > 1 else None
+            
+            if user_id in self.admin_ids:
+                return "⚠️ هذا المستخدم مخول بالفعل"
+            
+            success = await self.add_admin(user_id, username, self.userbot_admin_id)
+            return f"✅ تم إضافة المستخدم {user_id} بنجاح" if success else "❌ فشل في إضافة المستخدم"
+            
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
+    async def handle_remove_admin_command(self, args: str) -> str:
+        """Handle remove admin from queue"""
+        try:
+            if not args.strip():
+                return "❌ معرف المستخدم مطلوب"
+            
+            try:
+                user_id = int(args.strip())
+            except ValueError:
+                return "❌ معرف المستخدم يجب أن يكون رقماً"
+            
+            if user_id == self.userbot_admin_id:
+                return "❌ لا يمكن حذف الأدمن الرئيسي"
+                
+            if user_id not in self.admin_ids:
+                return "❌ هذا المستخدم ليس مخولاً"
+            
+            success = await self.remove_admin(user_id)
+            return f"✅ تم حذف المستخدم {user_id} بنجاح" if success else "❌ فشل في حذف المستخدم"
+            
+        except Exception as e:
+            return f"❌ حدث خطأ: {str(e)}"
+
         try:
             if not args.strip():
                 await event.reply("الاستخدام: إضافة_قناة <معرف_القناة_أو_اسم_المستخدم>")

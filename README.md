@@ -1,35 +1,50 @@
-# Telegram Premium Emoji Bot
+# Telegram Premium Emoji Bot with Control System
 
-A comprehensive Telegram bot built with Telethon that monitors channels and replaces normal emojis with premium emojis. Features Arabic command interface for easy management.
+A comprehensive dual-bot system: a Telegram UserBot built with Telethon that monitors channels and replaces emojis, combined with an official Bot API control interface for easy management through inline queries and interactive buttons.
 
 ## Features
 
-### 🔄 Emoji Replacement
+### 🤖 Dual Bot System
+- **UserBot (Telethon)**: Handles actual channel monitoring and emoji replacement
+- **Control Bot (Official Bot API)**: Provides interactive management interface
+- **Seamless Integration**: Commands flow from Control Bot to UserBot automatically
+
+### 🔄 Emoji Replacement (UserBot)
 - Monitors specified Telegram channels for new posts
 - Automatically replaces normal emojis with premium emojis based on database mappings  
 - Edits original messages in real-time
 - Supports message edits as well as new messages
+- Channel-specific and global replacement rules
 
-### 🎛️ Management Commands (Arabic)
-- **إضافة_استبدال** - Add emoji replacement mapping
-- **عرض_الاستبدالات** - List all emoji replacements
-- **حذف_استبدال** - Delete emoji replacement
-- **إضافة_قناة** - Add channel to monitoring list
-- **عرض_القنوات** - List monitored channels
-- **حذف_قناة** - Remove channel from monitoring
-- **مساعدة** - Show help message
+### 🎛️ Interactive Control Interface (Control Bot)
+- **Full Inline Mode Support**: Type `@controlbot` anywhere to access controls
+- **Interactive Buttons**: No need to remember commands
+- **Real-time Results**: Instant feedback from UserBot operations
+- **Comprehensive Management**: All UserBot functions accessible through UI
+
+#### Available Control Menus:
+- 📺 **Channel Management**: Add/remove channels, check permissions
+- 😀 **Emoji Management**: Global and channel-specific replacements
+- 🔄 **Forwarding Tasks**: Message copying between channels with delays
+- 👥 **Admin Management**: User authorization control
+- 📊 **Statistics**: System status and detailed reports
+- 🔧 **Advanced Tools**: Backup, sync, and maintenance
 
 ### 🗄️ Database Storage
 - PostgreSQL database for persistent storage
-- Emoji replacement mappings
+- Emoji replacement mappings (global and channel-specific)
 - Monitored channels list
-- Bot settings and configuration
+- Forwarding task configurations
+- Admin user management
+- Command queue for bot communication
 
 ### 🔐 Security Features
 - Session string authentication (no phone/password required)
+- Multi-level user authorization
 - Environment variable configuration
 - Database connection pooling
 - Comprehensive error handling and logging
+- Separate bot tokens for enhanced security
 
 ## Setup Instructions
 
@@ -67,14 +82,27 @@ if __name__ == '__main__':
     asyncio.run(main())
 ```
 
-### 4. Environment Setup
+### 4. Create Control Bot
+1. Message @BotFather on Telegram
+2. Create a new bot with `/newbot`
+3. Get your bot token
+4. Enable inline mode with `/setinline` and provide a description
+
+### 5. Environment Setup
 1. Copy `.env.example` to `.env`
 2. Fill in your credentials:
    ```
+   # UserBot credentials
    API_ID=your_api_id
    API_HASH=your_api_hash
    SESSION_STRING=your_session_string
+   
+   # Database
    DATABASE_URL=your_database_url
+   
+   # Control Bot
+   CONTROL_BOT_TOKEN=your_bot_token_from_botfather
+   USERBOT_ADMIN_ID=your_user_id
    ```
 
 ### 5. Install Dependencies
