@@ -540,6 +540,9 @@ class TelegramEmojiBot:
                 # Media message (photo, video, document, etc.)
                 caption = message.text or message.message or ""
                 
+                # Always copy the media file, not just the caption
+                logger.info(f"Copying media message with caption: '{caption[:50]}...' if caption else 'No caption'")
+                
                 # Check if the caption contains markdown-style formatting that needs to be converted
                 needs_markdown_parse = False
                 if caption and ('**' in caption or '__' in caption or 
