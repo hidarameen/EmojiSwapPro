@@ -522,16 +522,24 @@ class TelegramEmojiBot:
             emojis_to_replace = {}
             event_peer_id = utils.get_peer_id(event.chat)
             
+            logger.info(f"Processing message in channel {event_peer_id}, found emojis: {found_emojis}")
+            logger.info(f"Available channel mappings: {list(self.channel_emoji_mappings.keys())}")
+            logger.info(f"Channel {event_peer_id} mappings: {self.channel_emoji_mappings.get(event_peer_id, {})}")
+            
             for emoji in found_emojis:
                 # Check channel-specific replacements first
                 if (event_peer_id in self.channel_emoji_mappings and 
                     emoji in self.channel_emoji_mappings[event_peer_id]):
                     emojis_to_replace[emoji] = self.channel_emoji_mappings[event_peer_id][emoji]
                     replacements_made.append(emoji)
+                    logger.info(f"Found channel-specific replacement for {emoji}: {self.channel_emoji_mappings[event_peer_id][emoji]}")
                 # Then check global replacements
                 elif emoji in self.emoji_mappings:
                     emojis_to_replace[emoji] = self.emoji_mappings[emoji]
                     replacements_made.append(emoji)
+                    logger.info(f"Found global replacement for {emoji}: {self.emoji_mappings[emoji]}")
+                else:
+                    logger.info(f"No replacement found for emoji: {emoji}")
             
             if not emojis_to_replace:
                 return
@@ -564,7 +572,9 @@ class TelegramEmojiBot:
                         formatting_entities=entities
                     )
                     
-                    logger.info(f"Replaced emojis in message {message.id}: {list(emojis_to_replace.keys())}")
+                    logger.info(f"Successfully replaced emojis in message {message.id} in channel {event_peer_id}: {list(emojis_to_replace.keys())}")
+                    logger.info(f"Original text: {original_text[:100]}")
+                    logger.info(f"Modified text: {modified_text[:100]}")
                     
                 except Exception as edit_error:
                     logger.error(f"Failed to edit message {message.id}: {edit_error}")
@@ -1767,8 +1777,9 @@ class TelegramEmojiBot:
                 
                 # Check if message is from a monitored channel  
                 event_peer_id = utils.get_peer_id(event.chat)
+                logger.info(f"Checking message from channel {event_peer_id}, monitored channels: {list(self.monitored_channels.keys())}")
                 if event_peer_id in self.monitored_channels:
-                    logger.info(f"New message in monitored channel {event_peer_id}")
+                    logger.info(f"New message in monitored channel {event_peer_id}: {(event.message.text or event.message.message or '')[:100]}")
                     await self.replace_emojis_in_message(event)
                     
             except Exception as e:
