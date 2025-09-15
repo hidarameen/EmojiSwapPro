@@ -351,7 +351,7 @@ class TelegramEmojiBot:
             return False
 
     async def forward_message_to_targets(self, source_channel_id: int, message):
-        """Forward message to all target channels for this source"""
+        """Copy message content to all target channels for this source"""
         try:
             # Find active forwarding tasks for this source channel
             active_tasks = []
@@ -364,27 +364,43 @@ class TelegramEmojiBot:
             if not active_tasks:
                 return
             
-            logger.info(f"Found {len(active_tasks)} forwarding targets for channel {source_channel_id}")
+            logger.info(f"Found {len(active_tasks)} copying targets for channel {source_channel_id}")
             
-            # Forward to each target
+            # Copy to each target
             for task in active_tasks:
                 target_channel_id = task['target']
                 
                 try:
-                    # Forward the message
-                    await self.client.forward_messages(
-                        entity=target_channel_id,
-                        messages=message,
-                        from_peer=source_channel_id
-                    )
+                    # Copy the message content instead of forwarding
+                    if message.text or message.message:
+                        # Text message
+                        text_content = message.text or message.message
+                        await self.client.send_message(
+                            entity=target_channel_id,
+                            message=text_content,
+                            formatting_entities=message.entities
+                        )
+                    elif message.media:
+                        # Media message (photo, video, document, etc.)
+                        caption = message.text or message.message or ""
+                        await self.client.send_file(
+                            entity=target_channel_id,
+                            file=message.media,
+                            caption=caption,
+                            formatting_entities=message.entities
+                        )
+                    else:
+                        # Other types of messages
+                        logger.warning(f"Unsupported message type for copying from {source_channel_id}")
+                        continue
                     
-                    logger.info(f"Forwarded message from {source_channel_id} to {target_channel_id}")
+                    logger.info(f"Copied message from {source_channel_id} to {target_channel_id}")
                     
-                except Exception as forward_error:
-                    logger.error(f"Failed to forward message from {source_channel_id} to {target_channel_id}: {forward_error}")
+                except Exception as copy_error:
+                    logger.error(f"Failed to copy message from {source_channel_id} to {target_channel_id}: {copy_error}")
             
         except Exception as e:
-            logger.error(f"Failed to process forwarding for channel {source_channel_id}: {e}")
+            logger.error(f"Failed to process copying for channel {source_channel_id}: {e}")
 
     async def load_admin_ids(self):
         """Load admin IDs from database into cache"""
@@ -2440,9 +2456,9 @@ class TelegramEmojiBot:
             target_name = self.monitored_channels[target_channel_id].get('title', 'Unknown')
 
             if success:
-                await event.reply(f"✅ تم إضافة مهمة التوجيه بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+                await event.reply(f"✅ تم إضافة مهمة النسخ بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
             else:
-                await event.reply("❌ فشل في إضافة مهمة التوجيه")
+                await event.reply("❌ فشل في إضافة مهمة النسخ")
 
         except Exception as e:
             logger.error(f"Failed to add forwarding task: {e}")
@@ -2455,7 +2471,7 @@ class TelegramEmojiBot:
                 await event.reply("لا توجد مهام توجيه محفوظة")
                 return
 
-            response = "📋 قائمة مهام التوجيه:\n\n"
+            response = "📋 قائمة مهام النسخ:\n\n"
             
             for task_id, task_info in self.forwarding_tasks.items():
                 source_id = task_info['source']
@@ -2509,9 +2525,9 @@ class TelegramEmojiBot:
             success = await self.delete_forwarding_task(task_id)
 
             if success:
-                await event.reply(f"✅ تم حذف مهمة التوجيه بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+                await event.reply(f"✅ تم حذف مهمة النسخ بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
             else:
-                await event.reply("❌ فشل في حذف مهمة التوجيه")
+                await event.reply("❌ فشل في حذف مهمة النسخ")
 
         except Exception as e:
             logger.error(f"Failed to delete forwarding task: {e}")
@@ -2553,11 +2569,11 @@ class TelegramEmojiBot:
                     source_name = self.monitored_channels.get(task_info['source'], {}).get('title', 'Unknown')
                     target_name = self.monitored_channels.get(task_info['target'], {}).get('title', 'Unknown')
                     
-                    await event.reply(f"✅ تم تفعيل مهمة التوجيه بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+                    await event.reply(f"✅ تم تفعيل مهمة النسخ بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
                 else:
-                    await event.reply("✅ تم تفعيل مهمة التوجيه بنجاح!")
+                    await event.reply("✅ تم تفعيل مهمة النسخ بنجاح!")
             else:
-                await event.reply("❌ فشل في تفعيل مهمة التوجيه")
+                await event.reply("❌ فشل في تفعيل مهمة النسخ")
 
         except Exception as e:
             logger.error(f"Failed to activate forwarding task: {e}")
@@ -2587,9 +2603,9 @@ class TelegramEmojiBot:
             success = await self.deactivate_forwarding_task(task_id)
 
             if success:
-                await event.reply(f"✅ تم تعطيل مهمة التوجيه بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
+                await event.reply(f"✅ تم تعطيل مهمة النسخ بنجاح!\n📤 من: {source_name}\n📥 إلى: {target_name}")
             else:
-                await event.reply("❌ فشل في تعطيل مهمة التوجيه")
+                await event.reply("❌ فشل في تعطيل مهمة النسخ")
 
         except Exception as e:
             logger.error(f"Failed to deactivate forwarding task: {e}")
@@ -2617,12 +2633,12 @@ class TelegramEmojiBot:
 • تعطيل_استبدال_قناة <معرف_القناة> - تعطيل الاستبدال في القناة
 • حالة_استبدال_قناة [معرف_القناة] - فحص حالة الاستبدال
 
-🔄 إدارة مهام التوجيه:
-• إضافة_مهمة_توجيه <معرف_المصدر> <معرف_الهدف> [وصف] - إضافة مهمة توجيه جديدة
-• عرض_مهام_التوجيه - عرض جميع مهام التوجيه
-• حذف_مهمة_توجيه <معرف_المهمة> - حذف مهمة توجيه
-• تفعيل_مهمة_توجيه <معرف_المهمة> - تفعيل مهمة توجيه
-• تعطيل_مهمة_توجيه <معرف_المهمة> - تعطيل مهمة توجيه
+🔄 إدارة مهام النسخ:
+• إضافة_مهمة_توجيه <معرف_المصدر> <معرف_الهدف> [وصف] - إضافة مهمة نسخ جديدة
+• عرض_مهام_التوجيه - عرض جميع مهام النسخ
+• حذف_مهمة_توجيه <معرف_المهمة> - حذف مهمة نسخ
+• تفعيل_مهمة_توجيه <معرف_المهمة> - تفعيل مهمة نسخ
+• تعطيل_مهمة_توجيه <معرف_المهمة> - تعطيل مهمة نسخ
 
 📺 إدارة القنوات:
 • إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة
