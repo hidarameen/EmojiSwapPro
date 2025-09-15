@@ -437,8 +437,11 @@ class TelegramEmojiBot:
                 
                 # Preserve all entities exactly as they are to maintain complete formatting
                 if message.entities:
-                    # Log entities count only
+                    # Log the entities being preserved for debugging
                     logger.debug(f"Preserving {len(message.entities)} formatting entities")
+                    for entity in message.entities:
+                        entity_type = type(entity).__name__
+                        logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
                     
                     await self.client.send_message(
                         entity=target_channel_id,
@@ -461,8 +464,11 @@ class TelegramEmojiBot:
                 
                 # Preserve caption entities exactly as they are
                 if message.entities and caption:
-                    # Log caption entities count only
+                    # Log caption entities being preserved
                     logger.debug(f"Preserving {len(message.entities)} caption entities")
+                    for entity in message.entities:
+                        entity_type = type(entity).__name__
+                        logger.debug(f"  - Caption {entity_type} at offset {entity.offset}, length {entity.length}")
                     
                     await self.client.send_file(
                         entity=target_channel_id,
@@ -1224,8 +1230,11 @@ class TelegramEmojiBot:
     def extract_emojis_from_text(self, text: str) -> List[str]:
         """Extract all unique emojis and symbols from text using regex - handles composite emojis, variation selectors, and special symbols"""
         
-        # Only log basic info to avoid console spam
-        logger.debug(f"Extracting emojis from text of length: {len(text)}")
+        # Debug: Print Unicode codepoints for each character
+        logger.info(f"Text analysis for: '{text}'")
+        for i, char in enumerate(text):
+            unicode_point = ord(char)
+            logger.info(f"  Char {i}: '{char}' -> U+{unicode_point:04X}")
         
         # Enhanced regex pattern to match composite emojis and common symbols
         emoji_pattern = re.compile(
@@ -1350,7 +1359,7 @@ class TelegramEmojiBot:
         
         # Get all emojis and symbols found in text
         found_emojis = emoji_pattern.findall(text)
-        logger.debug(f"Regex found emojis/symbols: {found_emojis}")
+        logger.info(f"Regex found emojis/symbols: {found_emojis}")
         
         # Fallback: Check each character individually for common symbols that might be missed
         fallback_symbols = {
@@ -1383,7 +1392,7 @@ class TelegramEmojiBot:
         for char in text:
             if char in fallback_symbols and char not in found_emojis:
                 found_emojis.append(char)
-                logger.debug(f"Fallback found symbol: {char}")
+                logger.info(f"Fallback found symbol: {char} (U+{ord(char):04X})")
         
         # Return unique emojis while preserving order
         unique_emojis = []
@@ -1393,8 +1402,7 @@ class TelegramEmojiBot:
                 unique_emojis.append(emoji)
                 seen.add(emoji)
         
-        if unique_emojis:
-            logger.info(f"Found {len(unique_emojis)} unique emojis/symbols for replacement")
+        logger.info(f"Final unique emojis/symbols: {unique_emojis}")
         return unique_emojis
 
     async def replace_emojis_in_message(self, event):
@@ -1418,9 +1426,10 @@ class TelegramEmojiBot:
             
             # Extract emojis from the message
             found_emojis = self.extract_emojis_from_text(original_text)
+            logger.info(f"Found emojis in text: {found_emojis}")
             
             if not found_emojis:
-                logger.debug("No emojis found in message text")
+                logger.info("No emojis found in message text")
                 return
             
             # Check if replacement is enabled for this channel
@@ -1448,14 +1457,14 @@ class TelegramEmojiBot:
                     emoji in self.channel_emoji_mappings[event_peer_id]):
                     emojis_to_replace[emoji] = self.channel_emoji_mappings[event_peer_id][emoji]
                     replacements_made.append(emoji)
-                    logger.debug(f"Channel-specific replacement: {emoji} -> {self.channel_emoji_mappings[event_peer_id][emoji]}")
+                    logger.info(f"Found channel-specific replacement for {emoji}: {self.channel_emoji_mappings[event_peer_id][emoji]}")
                 # Then check global replacements
                 elif emoji in self.emoji_mappings:
                     emojis_to_replace[emoji] = self.emoji_mappings[emoji]
                     replacements_made.append(emoji)
-                    logger.debug(f"Global replacement: {emoji} -> {self.emoji_mappings[emoji]}")
+                    logger.info(f"Found global replacement for {emoji}: {self.emoji_mappings[emoji]}")
                 else:
-                    logger.debug(f"No replacement found for emoji: {emoji}")
+                    logger.info(f"No replacement found for emoji: {emoji}")
             
             if not emojis_to_replace:
                 return
@@ -1539,16 +1548,18 @@ class TelegramEmojiBot:
                             parse_mode=None  # Use raw entities to preserve everything
                         )
                         
-                        logger.info(f"Successfully replaced {len(emojis_to_replace)} emojis in message {message.id}")
+                        logger.info(f"Replaced emojis in message {message.id} while preserving {len(final_entities)} total formatting entities: {list(emojis_to_replace.keys())}")
                     
                 except Exception as edit_error:
-                    # Handle edit errors gracefully
+                    # Log the specific error but don't treat it as critical since the message forwarding should still work
                     if "Content of the message was not modified" in str(edit_error):
-                        logger.debug(f"Message {message.id} content unchanged, skipping edit")
+                        logger.warning(f"Message {message.id} content was already correct, skipping edit: {edit_error}")
                     else:
-                        logger.error(f"Failed to edit message {message.id}: {str(edit_error)[:100]}...")
-                        # Only log detailed info in debug mode
-                        logger.debug(f"Edit error details - Original: '{original_text[:50]}...', Modified: '{modified_text[:50] if 'modified_text' in locals() else 'N/A'}...'")
+                        logger.error(f"Failed to edit message {message.id}: {edit_error}")
+                        logger.error(f"Final entities count: {len(final_entities) if 'final_entities' in locals() else 'unknown'}")
+                        logger.error(f"Original text: '{original_text}'")
+                        logger.error(f"Modified text: '{modified_text}'")
+                        logger.error(f"Parsed text: '{parsed_text if 'parsed_text' in locals() else 'unknown'}')")
             
         except Exception as e:
             logger.error(f"Failed to replace emojis in message: {e}")
