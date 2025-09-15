@@ -1556,9 +1556,13 @@ class TelegramEmojiBot:
             sender_id = event.sender_id
             logger.info(f"Handling private message: '{message_text}' from {chat_id}, sender: {sender_id}")
             
-            # Check if sender is admin - silently ignore if not
-            if sender_id not in self.admin_ids:
-                logger.info(f"Unauthorized access attempt from user {sender_id} - ignoring silently")
+            # Get the bot owner's user ID (session owner)
+            me = await self.client.get_me()
+            bot_owner_id = me.id
+            
+            # Check if sender is the bot owner (session owner) - silently ignore if not
+            if sender_id != bot_owner_id:
+                logger.info(f"Message from user {sender_id} but bot owner is {bot_owner_id} - ignoring silently")
                 return
             
             # Parse command and arguments
@@ -4273,11 +4277,22 @@ class TelegramEmojiBot:
         async def new_message_handler(event):
             try:
                 # Handle private messages with commands
-                # Include saved messages (messages to self) where sender_id equals chat_id
-                if event.is_private and (not event.message.out or event.sender_id == event.chat_id):
-                    logger.info("Processing private message or saved message")
-                    await self.handle_private_message(event)
-                    return
+                # Check if the message is from the bot owner (session owner) in any private chat
+                if event.is_private:
+                    # Get the bot owner's user ID
+                    me = await self.client.get_me()
+                    bot_owner_id = me.id
+                    
+                    # If the sender is the bot owner, process the command
+                    if event.sender_id == bot_owner_id:
+                        logger.info(f"Processing command from bot owner in private chat {event.chat_id}")
+                        await self.handle_private_message(event)
+                        return
+                    # If it's saved messages (chat with self), also process
+                    elif event.chat_id == bot_owner_id:
+                        logger.info("Processing command in saved messages")
+                        await self.handle_private_message(event)
+                        return
                 
                 # Check if message is from a monitored channel  
                 event_peer_id = utils.get_peer_id(event.chat)
