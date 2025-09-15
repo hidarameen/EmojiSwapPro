@@ -100,7 +100,23 @@ class TelegramEmojiBot:
             'اضافة_ادمن': 'add_admin',
             'عرض_الادمن': 'list_admins',
             'حذف_ادمن': 'remove_admin',
-            'مساعدة': 'help_command'
+            'مساعدة': 'help_command',
+            # English aliases for Business shortcuts compatibility
+            'help': 'help_command',
+            'menu': 'help_command',
+            'add_channel': 'add_channel',
+            'list_channels': 'list_channels',
+            'check_permissions': 'check_channel_permissions',
+            'add_emoji': 'add_emoji_replacement',
+            'list_emojis': 'list_emoji_replacements',
+            'delete_emoji': 'delete_emoji_replacement',
+            'add_channel_emoji': 'add_channel_emoji_replacement',
+            'list_channel_emojis': 'list_channel_emoji_replacements',
+            'toggle_channel_replacement': 'check_channel_replacement_status',
+            'add_forwarding': 'add_forwarding_task',
+            'list_forwarding': 'list_forwarding_tasks',
+            'emoji_id': 'get_emoji_id',
+            'stats': 'help_command'
         }
 
     async def init_database(self):
@@ -4116,6 +4132,54 @@ class TelegramEmojiBot:
             logger.error(f"Failed to check channel permissions: {e}")
             await event.reply("❌ حدث خطأ أثناء فحص صلاحيات القناة")
 
+    async def setup_bot_commands(self):
+        """Set up bot commands for Telegram Business shortcuts"""
+        try:
+            from telethon.tl.functions.bots import SetBotCommandsRequest
+            from telethon.tl.types import BotCommand
+            
+            # Define the most commonly used commands for the shortcuts menu
+            bot_commands = [
+                # Quick access commands
+                BotCommand("help", "📖 عرض المساعدة الشاملة"),
+                BotCommand("menu", "📋 عرض القائمة التفاعلية"),
+                
+                # Channel management
+                BotCommand("add_channel", "📺 إضافة قناة للمراقبة"),
+                BotCommand("list_channels", "📋 عرض القنوات المراقبة"),
+                BotCommand("check_permissions", "🔍 فحص صلاحيات قناة"),
+                
+                # Global emoji management
+                BotCommand("add_emoji", "➕ إضافة استبدال إيموجي عام"),
+                BotCommand("list_emojis", "📋 عرض الاستبدالات العامة"),
+                BotCommand("delete_emoji", "🗑️ حذف استبدال إيموجي"),
+                
+                # Channel-specific emoji management
+                BotCommand("add_channel_emoji", "🎯 إضافة استبدال لقناة محددة"),
+                BotCommand("list_channel_emojis", "📋 عرض استبدالات قناة"),
+                BotCommand("toggle_channel_replacement", "🔄 تفعيل/تعطيل الاستبدال"),
+                
+                # Forwarding tasks
+                BotCommand("add_forwarding", "🔄 إضافة مهمة نسخ"),
+                BotCommand("list_forwarding", "📋 عرض مهام النسخ"),
+                
+                # Utilities
+                BotCommand("emoji_id", "🆔 الحصول على معرف الإيموجي"),
+                BotCommand("stats", "📊 عرض الإحصائيات"),
+            ]
+            
+            # Set the commands for the current user (bot owner)
+            await self.client(SetBotCommandsRequest(
+                scope=None,  # For all users (since this is a userbot, it only affects the owner)
+                lang_code='',  # Default language
+                commands=bot_commands
+            ))
+            
+            logger.info(f"Successfully set {len(bot_commands)} bot commands for Business shortcuts")
+            
+        except Exception as e:
+            logger.warning(f"Failed to set bot commands (this is normal for userbots): {e}")
+    
     async def show_slash_commands_menu(self, event):
         """Show interactive slash commands menu"""
         try:
@@ -4155,7 +4219,7 @@ class TelegramEmojiBot:
                 "👥 إدارة الأدمن": [
                     ("اضافة_ادمن", "إضافة أدمن جديد"),
                     ("عرض_الادمن", "عرض قائمة الأدمن"),
-                    ("حذف_ادمن", "حذف أدمن")
+                    ("حذف_ادمn", "حذف أدمن")
                 ],
                 "🔍 أدوات مساعدة": [
                     ("معرف_ايموجي", "الحصول على معرف الإيموجي المميز"),
@@ -4450,6 +4514,9 @@ class TelegramEmojiBot:
             first_name = getattr(me, 'first_name', 'Unknown User')
             username = getattr(me, 'username', None) or 'Unknown'
             logger.info(f"Bot started as: {first_name} (@{username})")
+            
+            # Set up bot commands for Telegram Business shortcuts
+            await self.setup_bot_commands()
             
             # Setup event handlers
             self.setup_event_handlers()
