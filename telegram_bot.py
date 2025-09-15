@@ -435,6 +435,14 @@ class TelegramEmojiBot:
                 # - And all other Telegram formatting
                 text_content = message.text or message.message
                 
+                # Check if the text contains markdown-style formatting (like **text**)
+                # that needs to be converted to proper Telegram entities
+                needs_markdown_parse = False
+                if ('**' in text_content or '__' in text_content or 
+                    '~~' in text_content or '`' in text_content or
+                    '[' in text_content and '](' in text_content):
+                    needs_markdown_parse = True
+                
                 # Preserve all entities exactly as they are to maintain complete formatting
                 if message.entities:
                     # Log the entities being preserved for debugging
@@ -450,21 +458,83 @@ class TelegramEmojiBot:
                     
                     logger.info(f"Copying message with {premium_emoji_count} premium emojis and {len(message.entities) - premium_emoji_count} other formatting entities")
                     
-                    await self.client.send_message(
-                        entity=target_channel_id,
-                        message=text_content,
-                        formatting_entities=message.entities,
-                        parse_mode=None,  # Use raw entities to preserve everything exactly
-                        link_preview=False  # Disable link preview to avoid conflicts
-                    )
+                    # If the text still contains markdown syntax, parse it to get proper entities
+                    if needs_markdown_parse:
+                        try:
+                            # Parse the text with markdown to get proper formatting entities
+                            parsed_text, parsed_entities = self.parse_mode.parse(text_content)
+                            
+                            # Merge existing custom emoji entities with new formatting entities
+                            final_entities = []
+                            
+                            # Add custom emoji entities from the original message
+                            for entity in message.entities:
+                                if isinstance(entity, MessageEntityCustomEmoji):
+                                    final_entities.append(entity)
+                            
+                            # Add formatting entities from markdown parsing (but skip custom emojis to avoid duplicates)
+                            for entity in parsed_entities:
+                                if not isinstance(entity, MessageEntityCustomEmoji):
+                                    final_entities.append(entity)
+                            
+                            # Sort entities by offset to maintain proper order
+                            final_entities.sort(key=lambda e: e.offset)
+                            
+                            logger.info(f"Parsed markdown and merged entities: {len(final_entities)} total entities")
+                            
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=parsed_text,
+                                formatting_entities=final_entities,
+                                parse_mode=None,
+                                link_preview=False
+                            )
+                        except Exception as parse_error:
+                            logger.warning(f"Failed to parse markdown in copied message, using original entities: {parse_error}")
+                            # Fallback to original method
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=text_content,
+                                formatting_entities=message.entities,
+                                parse_mode=None,
+                                link_preview=False
+                            )
+                    else:
+                        # No markdown syntax detected, use entities as-is
+                        await self.client.send_message(
+                            entity=target_channel_id,
+                            message=text_content,
+                            formatting_entities=message.entities,
+                            parse_mode=None,
+                            link_preview=False
+                        )
                 else:
-                    # No entities, send plain text
-                    logger.info("Copying plain text message (no formatting entities)")
-                    await self.client.send_message(
-                        entity=target_channel_id,
-                        message=text_content,
-                        parse_mode=None
-                    )
+                    # No entities, but check if text has markdown that should be parsed
+                    if needs_markdown_parse:
+                        try:
+                            parsed_text, parsed_entities = self.parse_mode.parse(text_content)
+                            logger.info(f"Parsing markdown for text without entities: {len(parsed_entities)} entities found")
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=parsed_text,
+                                formatting_entities=parsed_entities,
+                                parse_mode=None
+                            )
+                        except Exception as parse_error:
+                            logger.warning(f"Failed to parse markdown, sending as plain text: {parse_error}")
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=text_content,
+                                parse_mode=None
+                            )
+                    else:
+                        # No entities and no markdown, send plain text
+                        logger.info("Copying plain text message (no formatting entities)")
+                        await self.client.send_message(
+                            entity=target_channel_id,
+                            message=text_content,
+                            parse_mode=None
+                        )
                     
             elif message.media:
                 # Media message (photo, video, document, etc.)
