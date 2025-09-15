@@ -409,20 +409,16 @@ class TelegramEmojiBot:
         try:
             # Copy the message content instead of forwarding
             if message.text or message.message:
-                # Text message - preserve all formatting entities
+                # Text message - preserve all formatting entities including custom emojis
                 text_content = message.text or message.message
                 
-                # Use the original entities to preserve formatting (bold, italic, links, etc.)
-                # Convert custom emojis back to markdown format for proper handling
+                # Preserve all entities as-is to maintain premium emojis
                 if message.entities:
-                    # Use the CustomParseMode unparse to handle custom emojis properly
-                    unparsed_text, unparsed_entities = CustomParseMode.unparse(text_content, message.entities)
-                    
                     await self.client.send_message(
                         entity=target_channel_id,
-                        message=unparsed_text,
-                        formatting_entities=unparsed_entities,
-                        parse_mode=None  # Use raw entities instead of parse mode
+                        message=text_content,
+                        formatting_entities=message.entities,
+                        parse_mode=None  # Use raw entities to preserve everything
                     )
                 else:
                     # No entities, send plain text
@@ -435,16 +431,14 @@ class TelegramEmojiBot:
                 # Media message (photo, video, document, etc.)
                 caption = message.text or message.message or ""
                 
-                # Handle caption formatting entities the same way
+                # Preserve caption entities as-is
                 if message.entities and caption:
-                    unparsed_caption, unparsed_entities = CustomParseMode.unparse(caption, message.entities)
-                    
                     await self.client.send_file(
                         entity=target_channel_id,
                         file=message.media,
-                        caption=unparsed_caption,
-                        formatting_entities=unparsed_entities,
-                        parse_mode=None  # Use raw entities instead of parse mode
+                        caption=caption,
+                        formatting_entities=message.entities,
+                        parse_mode=None  # Use raw entities to preserve everything
                     )
                 else:
                     await self.client.send_file(
@@ -457,7 +451,7 @@ class TelegramEmojiBot:
                 logger.warning(f"Unsupported message type for copying from {source_channel_id}")
                 return
             
-            logger.info(f"Copied message from {source_channel_id} to {target_channel_id} with preserved formatting")
+            logger.info(f"Copied message from {source_channel_id} to {target_channel_id} with preserved formatting and premium emojis")
             
         except Exception as copy_error:
             logger.error(f"Failed to copy message from {source_channel_id} to {target_channel_id}: {copy_error}")
@@ -1365,6 +1359,13 @@ class TelegramEmojiBot:
             
             if not original_text:
                 logger.info("No text in message, skipping emoji replacement")
+                return
+            
+            # Skip if message already contains premium emoji markdown format or custom emoji entities
+            # This prevents re-processing already processed messages
+            if ("[💎](emoji/" in original_text or 
+                (message.entities and any(hasattr(entity, 'document_id') for entity in message.entities))):
+                logger.info("Message already contains premium emojis or custom emoji entities, skipping replacement")
                 return
             
             # Extract emojis from the message
@@ -4185,7 +4186,7 @@ class TelegramEmojiBot:
                     message_text = event.message.text or event.message.message or ""
                     logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
                     
-                    # Handle emoji replacement first
+                    # Handle emoji replacement first (only for original messages in source channels)
                     await self.replace_emojis_in_message(event)
                     
                     # Then handle forwarding (after emoji replacement)
@@ -4214,6 +4215,7 @@ class TelegramEmojiBot:
                 event_peer_id = utils.get_peer_id(event.chat)
                 if event_peer_id in self.monitored_channels:
                     logger.info(f"Message edited in monitored channel {event_peer_id}")
+                    # Only replace emojis in source channel messages, not in copied messages
                     await self.replace_emojis_in_message(event)
                     
             except Exception as e:
