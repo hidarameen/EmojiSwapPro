@@ -1022,8 +1022,8 @@ class TelegramEmojiBot:
                 await command_handler(event, args)
                 logger.info("Command handler executed successfully")
             else:
-                logger.info("No matching command found, sending help message")
-                await event.reply("أمر غير معروف. استخدم 'مساعدة' لعرض الأوامر المتاحة.")
+                logger.info("No matching command found, ignoring silently")
+                # Silently ignore unknown commands instead of sending error message
                 
         except Exception as e:
             logger.error(f"Failed to handle private message: {e}")
