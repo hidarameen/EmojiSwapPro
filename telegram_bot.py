@@ -467,6 +467,215 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to load admin IDs: {e}")
 
+    async def process_command_queue(self):
+        """Process pending commands from control bot"""
+        if self.db_pool is None:
+            return
+        
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Get pending commands
+                commands = await conn.fetch(
+                    "SELECT * FROM command_queue WHERE status = 'pending' ORDER BY created_at LIMIT 10"
+                )
+                
+                for cmd_row in commands:
+                    try:
+                        command_id = cmd_row['id']
+                        command = cmd_row['command']
+                        args = cmd_row['args'] or ""
+                        requested_by = cmd_row['requested_by']
+                        
+                        logger.info(f"Processing command queue ID {command_id}: {command}")
+                        
+                        # Mark as processing
+                        await conn.execute(
+                            "UPDATE command_queue SET status = 'processing' WHERE id = $1",
+                            command_id
+                        )
+                        
+                        # Execute command
+                        result = await self.execute_queued_command(command, args, requested_by)
+                        
+                        # Update with result
+                        await conn.execute(
+                            "UPDATE command_queue SET status = 'completed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
+                            result, command_id
+                        )
+                        
+                        # Send result to user if needed
+                        if result and requested_by:
+                            await self.send_result_to_user(requested_by, f"✅ نتيجة الأمر {command}:\n\n{result}")
+                        
+                    except Exception as cmd_error:
+                        logger.error(f"Failed to process command {command_id}: {cmd_error}")
+                        # Mark as failed
+                        await conn.execute(
+                            "UPDATE command_queue SET status = 'failed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
+                            str(cmd_error), command_id
+                        )
+                        
+                        if requested_by:
+                            await self.send_result_to_user(requested_by, f"❌ فشل تنفيذ الأمر {command}:\n{cmd_error}")
+                
+        except Exception as e:
+            logger.error(f"Failed to process command queue: {e}")
+
+    async def execute_queued_command(self, command: str, args: str, requested_by: int) -> str:
+        """Execute a queued command and return result"""
+        try:
+            # Map command to internal method
+            command_mapping = {
+                'list_channels': self.get_channels_list,
+                'list_global_emojis': self.get_global_emojis_list,
+                'list_channel_emojis': self.get_channel_emojis_list,
+                'list_forwarding_tasks': self.get_forwarding_tasks_list,
+                'get_stats': self.get_system_stats,
+            }
+            
+            if command in command_mapping:
+                return await command_mapping[command]()
+            else:
+                return f"❌ أمر غير معروف: {command}"
+                
+        except Exception as e:
+            logger.error(f"Failed to execute command {command}: {e}")
+            return f"❌ خطأ في تنفيذ الأمر: {e}"
+
+    async def get_channels_list(self) -> str:
+        """Get formatted list of monitored channels"""
+        if not self.monitored_channels:
+            return "لا توجد قنوات مراقبة محفوظة"
+        
+        result = "📺 **قائمة القنوات المراقبة:**\n\n"
+        for channel_id, info in self.monitored_channels.items():
+            title = info['title'] or 'غير معروف'
+            username = info['username'] or 'غير متاح'
+            
+            # Get replacement status
+            is_active = self.channel_replacement_status.get(channel_id, True)
+            status_icon = "✅" if is_active else "❌"
+            status_text = "مُفعل" if is_active else "مُعطل"
+            
+            # Count replacements
+            replacement_count = len(self.channel_emoji_mappings.get(channel_id, {}))
+            
+            result += f"• **{title}** (@{username})\n"
+            result += f"  📋 المعرف: `{channel_id}`\n"
+            result += f"  🔄 الاستبدال: {status_icon} {status_text}\n"
+            result += f"  📝 الاستبدالات: {replacement_count}\n\n"
+        
+        return result
+
+    async def get_global_emojis_list(self) -> str:
+        """Get formatted list of global emoji replacements"""
+        if not self.emoji_mappings:
+            return "لا توجد استبدالات إيموجي عامة محفوظة"
+        
+        result = "😀 **قائمة الاستبدالات العامة:**\n\n"
+        count = 0
+        for normal_emoji, premium_id in self.emoji_mappings.items():
+            result += f"• {normal_emoji} → `{premium_id}`\n"
+            count += 1
+            if count >= 20:  # Limit to prevent very long messages
+                result += f"\n... وعدد {len(self.emoji_mappings) - 20} استبدال آخر"
+                break
+        
+        return result
+
+    async def get_channel_emojis_list(self) -> str:
+        """Get formatted list of channel-specific emoji replacements"""
+        if not self.channel_emoji_mappings:
+            return "لا توجد استبدالات إيموجي خاصة بالقنوات"
+        
+        result = "🎯 **استبدالات القنوات:**\n\n"
+        for channel_id, mappings in self.channel_emoji_mappings.items():
+            channel_name = self.monitored_channels.get(channel_id, {}).get('title', f'القناة {channel_id}')
+            result += f"📺 **{channel_name}** (`{channel_id}`):\n"
+            
+            count = 0
+            for normal_emoji, premium_id in mappings.items():
+                result += f"  • {normal_emoji} → `{premium_id}`\n"
+                count += 1
+                if count >= 10:  # Limit per channel
+                    result += f"  ... وعدد {len(mappings) - 10} استبدال آخر\n"
+                    break
+            result += "\n"
+        
+        return result
+
+    async def get_forwarding_tasks_list(self) -> str:
+        """Get formatted list of forwarding tasks"""
+        if not self.forwarding_tasks:
+            return "لا توجد مهام نسخ محفوظة"
+        
+        result = "🔄 **قائمة مهام النسخ:**\n\n"
+        for task_id, task_info in self.forwarding_tasks.items():
+            source_id = task_info['source']
+            target_id = task_info['target']
+            is_active = task_info['active']
+            delay = task_info.get('delay', 0)
+            description = task_info['description']
+
+            source_name = self.monitored_channels.get(source_id, {}).get('title', f'القناة {source_id}')
+            target_name = self.monitored_channels.get(target_id, {}).get('title', f'القناة {target_id}')
+
+            status_icon = "✅" if is_active else "❌"
+            status_text = "مُفعلة" if is_active else "مُعطلة"
+
+            result += f"🆔 **المهمة:** `{task_id}`\n"
+            result += f"📤 **من:** {source_name}\n"
+            result += f"📥 **إلى:** {target_name}\n"
+            result += f"🔄 **الحالة:** {status_icon} {status_text}\n"
+            result += f"⏱️ **التأخير:** {delay} ثانية\n"
+            
+            if description:
+                result += f"📝 **الوصف:** {description}\n"
+            
+            result += "\n"
+
+        return result
+
+    async def get_system_stats(self) -> str:
+        """Get system statistics"""
+        stats = f"""📊 **إحصائيات النظام:**
+
+📺 **القنوات:**
+• المراقبة: {len(self.monitored_channels)}
+• الاستبدال المفعل: {sum(1 for active in self.channel_replacement_status.values() if active)}
+
+😀 **الاستبدالات:**
+• العامة: {len(self.emoji_mappings)}
+• الخاصة بالقنوات: {sum(len(mappings) for mappings in self.channel_emoji_mappings.values())}
+• الإجمالي: {len(self.emoji_mappings) + sum(len(mappings) for mappings in self.channel_emoji_mappings.values())}
+
+🔄 **مهام النسخ:**
+• النشطة: {len(self.forwarding_tasks)}
+• المعطلة: يتم حسابها من قاعدة البيانات
+
+👥 **الإدارة:**
+• الأدمن: {len(self.admin_ids)}
+"""
+        return stats
+
+    async def send_result_to_user(self, user_id: int, message: str):
+        """Send result message to user"""
+        try:
+            await self.client.send_message(user_id, message)
+            logger.info(f"Sent result to user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to send result to user {user_id}: {e}")
+
+    async def start_command_queue_processor(self):
+        """Start periodic command queue processing"""
+        while True:
+            try:
+                await self.process_command_queue()
+                await asyncio.sleep(5)  # Check every 5 seconds
+            except Exception as e:
+                logger.error(f"Command queue processor error: {e}")
+                await asyncio.sleep(10)  # Wait longer on error
+
     async def add_admin(self, user_id: int, username: str = None, added_by: int = None) -> bool:
         """Add admin to database and cache"""
         if self.db_pool is None:
@@ -2990,7 +3199,11 @@ class TelegramEmojiBot:
             # Setup event handlers
             self.setup_event_handlers()
             
+            # Start command queue processor
+            asyncio.create_task(self.start_command_queue_processor())
+            
             logger.info("Bot is now running and monitoring channels...")
+            logger.info("Command queue processor started for Control Bot integration")
             
             # Keep the bot running
             try:
