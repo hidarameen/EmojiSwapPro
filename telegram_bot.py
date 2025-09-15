@@ -1581,17 +1581,24 @@ class TelegramEmojiBot:
                 
             logger.info(f"Handling private message: '{message_text}' from {chat_id}, sender: {sender_id}")
             
-            # Get the bot owner's user ID (session owner)
+            # Check if sender is authorized (session owner OR admin)
             try:
                 me = await self.client.get_me()
                 bot_owner_id = me.id
                 
-                # Check if sender is the bot owner (session owner) - silently ignore if not
-                if sender_id != bot_owner_id:
-                    logger.info(f"Message from user {sender_id} but bot owner is {bot_owner_id} - ignoring silently")
+                # Allow commands from:
+                # 1. Bot owner (session owner)
+                # 2. Authorized admins
+                is_authorized = (sender_id == bot_owner_id) or (sender_id in self.admin_ids)
+                
+                if not is_authorized:
+                    logger.info(f"Message from unauthorized user {sender_id} - ignoring silently")
                     return
+                    
+                logger.info(f"Authorized user {sender_id} - processing command")
+                
             except Exception as e:
-                logger.error(f"Error getting bot owner info: {e}")
+                logger.error(f"Error checking user authorization: {e}")
                 return
             
             # Handle slash command menu request
