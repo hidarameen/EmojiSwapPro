@@ -598,35 +598,36 @@ class TelegramEmojiBot:
                 await event.reply("لا توجد استبدالات إيموجي محفوظة")
                 return
             
-            # Create the response with premium emojis
+            # Create response parts for both methods
             response_parts = ["📋 قائمة استبدالات الإيموجي:\n"]
+            fallback_parts = ["📋 قائمة استبدالات الإيموجي:\n"]
             
             for normal_emoji, premium_id in self.emoji_mappings.items():
-                # Create markdown for premium emoji
-                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_id})"
-                response_parts.append(f"{normal_emoji} → {premium_emoji_markdown} (ID: {premium_id})")
+                # For premium emoji display: normal → premium → (ID)
+                premium_emoji_markdown = f"[💎](emoji/{premium_id})"
+                response_parts.append(f"{normal_emoji} → {premium_emoji_markdown} → (ID: {premium_id})")
+                
+                # Fallback format
+                fallback_parts.append(f"{normal_emoji} → إيموجي مميز → (ID: {premium_id})")
             
-            # Join all parts
-            response_text = "\n".join(response_parts)
-            
-            # Parse the text to convert premium emoji markdown
+            # Try to send with premium emojis first
             try:
+                response_text = "\n".join(response_parts)
                 parsed_text, entities = self.parse_mode.parse(response_text)
                 
-                # Send with formatting entities to show premium emojis
                 await self.client.send_message(
                     event.chat_id,
                     parsed_text,
                     formatting_entities=entities
                 )
+                logger.info("Successfully sent emoji list with premium emojis")
                 
             except Exception as parse_error:
                 logger.error(f"Failed to parse premium emojis in list: {parse_error}")
-                # Fallback to simple text format
-                simple_response = "📋 قائمة استبدالات الإيموجي:\n\n"
-                for normal_emoji, premium_id in self.emoji_mappings.items():
-                    simple_response += f"{normal_emoji} → إيموجي مميز (ID: {premium_id})\n"
-                await event.reply(simple_response)
+                # Use fallback format
+                fallback_response = "\n".join(fallback_parts)
+                await event.reply(fallback_response)
+                logger.info("Sent emoji list using fallback format")
             
         except Exception as e:
             logger.error(f"Failed to list emoji replacements: {e}")
