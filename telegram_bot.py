@@ -443,21 +443,44 @@ class TelegramEmojiBot:
             return False
 
     async def remove_monitored_channel(self, channel_id: int) -> bool:
-        """Remove channel from monitoring list"""
+        """Remove channel from monitoring list and all its emoji replacements"""
         if self.db_pool is None:
             logger.error("Database pool not initialized")
             return False
         try:
             async with self.db_pool.acquire() as conn:
+                # First, delete all channel-specific emoji replacements
+                emoji_delete_result = await conn.execute(
+                    "DELETE FROM channel_emoji_replacements WHERE channel_id = $1",
+                    channel_id
+                )
+                
+                # Extract count from delete result (format: 'DELETE n')
+                emoji_deleted_count = 0
+                if emoji_delete_result and emoji_delete_result.startswith('DELETE '):
+                    try:
+                        emoji_deleted_count = int(emoji_delete_result.split(' ')[1])
+                    except (IndexError, ValueError):
+                        emoji_deleted_count = 0
+                
+                # Then remove the channel from monitoring
                 result = await conn.execute(
                     "UPDATE monitored_channels SET is_active = FALSE WHERE channel_id = $1",
                     channel_id
                 )
                 
                 if result == 'UPDATE 1':
-                    # Update cache
+                    # Update cache - remove channel
                     self.monitored_channels.pop(channel_id, None)
+                    
+                    # Update cache - remove channel emoji mappings
+                    if channel_id in self.channel_emoji_mappings:
+                        del self.channel_emoji_mappings[channel_id]
+                    
                     logger.info(f"Removed monitored channel: {channel_id}")
+                    if emoji_deleted_count > 0:
+                        logger.info(f"Also deleted {emoji_deleted_count} channel-specific emoji replacements")
+                    
                     return True
                 else:
                     return False
@@ -1194,12 +1217,27 @@ class TelegramEmojiBot:
                 await event.reply("معرف القناة يجب أن يكون رقماً")
                 return
             
+            if channel_id not in self.monitored_channels:
+                await event.reply("القناة غير موجودة في قائمة المراقبة")
+                return
+            
+            # Get channel info and count of emoji replacements before deletion
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', 'Unknown Channel')
+            emoji_count = len(self.channel_emoji_mappings.get(channel_id, {}))
+            
             success = await self.remove_monitored_channel(channel_id)
             
             if success:
-                await event.reply(f"تم حذف القناة من المراقبة: {channel_id}")
+                response = f"✅ تم حذف القناة من المراقبة: {channel_name}"
+                if emoji_count > 0:
+                    response += f"\n🗑️ تم حذف {emoji_count} استبدال إيموجي خاص بالقناة تلقائياً"
+                else:
+                    response += "\n📝 لم تكن هناك استبدالات خاصة بالقناة"
+                
+                await event.reply(response)
             else:
-                await event.reply("القناة غير موجودة في قائمة المراقبة")
+                await event.reply("❌ فشل في حذف القناة")
                 
         except Exception as e:
             logger.error(f"Failed to remove channel: {e}")
