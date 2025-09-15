@@ -6,7 +6,7 @@ integrations = ["agentstack-trigger-telegram:1.0.0"]
 
 [nix]
 channel = "stable-24_11"
-packages = ["jq", "openssl", "postgresql"]
+packages = ["jq", "openssl", "postgresql", "docker"]
 
 [deployment]
 build = ["bash", "scripts/build.sh"]
