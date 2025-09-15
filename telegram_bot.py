@@ -408,28 +408,55 @@ class TelegramEmojiBot:
         try:
             # Copy the message content instead of forwarding
             if message.text or message.message:
-                # Text message
+                # Text message - preserve all formatting entities
                 text_content = message.text or message.message
-                await self.client.send_message(
-                    entity=target_channel_id,
-                    message=text_content,
-                    formatting_entities=message.entities
-                )
+                
+                # Use the original entities to preserve formatting (bold, italic, links, etc.)
+                # Convert custom emojis back to markdown format for proper handling
+                if message.entities:
+                    # Use the CustomParseMode unparse to handle custom emojis properly
+                    unparsed_text, unparsed_entities = CustomParseMode.unparse(text_content, message.entities)
+                    
+                    await self.client.send_message(
+                        entity=target_channel_id,
+                        message=unparsed_text,
+                        formatting_entities=unparsed_entities,
+                        parse_mode=None  # Use raw entities instead of parse mode
+                    )
+                else:
+                    # No entities, send plain text
+                    await self.client.send_message(
+                        entity=target_channel_id,
+                        message=text_content
+                    )
+                    
             elif message.media:
                 # Media message (photo, video, document, etc.)
                 caption = message.text or message.message or ""
-                await self.client.send_file(
-                    entity=target_channel_id,
-                    file=message.media,
-                    caption=caption,
-                    formatting_entities=message.entities
-                )
+                
+                # Handle caption formatting entities the same way
+                if message.entities and caption:
+                    unparsed_caption, unparsed_entities = CustomParseMode.unparse(caption, message.entities)
+                    
+                    await self.client.send_file(
+                        entity=target_channel_id,
+                        file=message.media,
+                        caption=unparsed_caption,
+                        formatting_entities=unparsed_entities,
+                        parse_mode=None  # Use raw entities instead of parse mode
+                    )
+                else:
+                    await self.client.send_file(
+                        entity=target_channel_id,
+                        file=message.media,
+                        caption=caption
+                    )
             else:
                 # Other types of messages
                 logger.warning(f"Unsupported message type for copying from {source_channel_id}")
                 return
             
-            logger.info(f"Copied message from {source_channel_id} to {target_channel_id}")
+            logger.info(f"Copied message from {source_channel_id} to {target_channel_id} with preserved formatting")
             
         except Exception as copy_error:
             logger.error(f"Failed to copy message from {source_channel_id} to {target_channel_id}: {copy_error}")
