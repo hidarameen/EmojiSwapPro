@@ -1499,17 +1499,11 @@ class TelegramEmojiBot:
                 logger.info("No text in message, skipping emoji replacement")
                 return
             
-            # Skip if message already contains custom emoji entities (premium emojis)
+            # Skip if message already contains premium emoji markdown format or custom emoji entities
             # This prevents re-processing already processed messages
-            has_custom_emojis = False
-            if message.entities:
-                for entity in message.entities:
-                    if hasattr(entity, 'document_id'):
-                        has_custom_emojis = True
-                        break
-            
-            if has_custom_emojis:
-                logger.info("Message already contains custom emoji entities (premium emojis), skipping replacement")
+            if ("[💎](emoji/" in original_text or 
+                (message.entities and any(hasattr(entity, 'document_id') for entity in message.entities))):
+                logger.info("Message already contains premium emojis or custom emoji entities, skipping replacement")
                 return
             
             # Extract emojis from the message
@@ -1657,36 +1651,27 @@ class TelegramEmojiBot:
                     
                     # Only proceed if we have emoji replacements that are safe to make
                     if safe_emoji_positions:
-                        try:
-                            # Edit the original message with custom emoji entities and preserved formatting
-                            # The text remains the same, but entities now include custom emojis
-                            await self.client.edit_message(
-                                event.chat_id,
-                                message.id,
-                                original_text,  # Keep original text unchanged
-                                formatting_entities=final_entities,
-                                parse_mode=None  # Use raw entities to preserve everything exactly
-                            )
-                            
-                            logger.info(f"Successfully replaced {len(safe_emoji_positions)} emoji instances in message {message.id} with {len(final_entities)} total formatting entities")
-                            
-                        except Exception as edit_error:
-                            # Handle specific edit errors
-                            error_msg = str(edit_error)
-                            if "Content of the message was not modified" in error_msg:
-                                logger.info(f"Message {message.id} already has the same content with premium emojis - no changes needed")
-                            elif "MESSAGE_NOT_MODIFIED" in error_msg:
-                                logger.info(f"Message {message.id} content identical to existing - no modification required")
-                            else:
-                                logger.error(f"Failed to edit message {message.id}: {edit_error}")
-                                # Log entity details for debugging
-                                logger.error(f"Attempted to set {len(final_entities)} entities")
-                                for i, entity in enumerate(final_entities):
-                                    logger.error(f"  Entity {i}: {type(entity).__name__} at offset {entity.offset}, length {entity.length}")
+                        # Edit the original message with custom emoji entities and preserved formatting
+                        # The text remains the same, but entities now include custom emojis
+                        await self.client.edit_message(
+                            event.chat_id,
+                            message.id,
+                            original_text,  # Keep original text unchanged
+                            formatting_entities=final_entities,
+                            parse_mode=None  # Use raw entities to preserve everything exactly
+                        )
+                        
+                        logger.info(f"Replaced {len(safe_emoji_positions)} emoji instances in message {message.id} while preserving {len(final_entities)} total formatting entities (skipped {len(emoji_positions) - len(safe_emoji_positions)} emojis in code formatting)")
                     else:
                         logger.info(f"All {len(emoji_positions)} emoji instances are inside code formatting, skipping replacement")
                     
-                
+                except Exception as edit_error:
+                    logger.error(f"Failed to edit message {message.id}: {edit_error}")
+                    logger.error(f"Final entities count: {len(final_entities) if 'final_entities' in locals() else 'unknown'}")
+                    # Log entity details for debugging
+                    if 'final_entities' in locals():
+                        for i, entity in enumerate(final_entities):
+                            logger.error(f"  Entity {i}: {type(entity).__name__} at offset {entity.offset}, length {entity.length}")
             
         except Exception as e:
             logger.error(f"Failed to replace emojis in message: {e}")
