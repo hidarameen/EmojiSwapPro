@@ -60,7 +60,8 @@ class TelegramEmojiBot:
         self.parse_mode = CustomParseMode('markdown')
         
         # Cache for emoji mappings and monitored channels
-        self.emoji_mappings: Dict[str, int] = {}
+        self.emoji_mappings: Dict[str, int] = {}  # Global replacements
+        self.channel_emoji_mappings: Dict[int, Dict[str, int]] = {}  # Channel-specific replacements
         self.monitored_channels: Dict[int, Dict[str, str]] = {}
         
         # Cache for admin list
@@ -72,6 +73,10 @@ class TelegramEmojiBot:
             'عرض_الاستبدالات': 'list_emoji_replacements', 
             'حذف_استبدال': 'delete_emoji_replacement',
             'تنظيف_الاستبدالات': 'clean_duplicate_replacements',
+            'إضافة_استبدال_قناة': 'add_channel_emoji_replacement',
+            'عرض_استبدالات_قناة': 'list_channel_emoji_replacements',
+            'حذف_استبدال_قناة': 'delete_channel_emoji_replacement',
+            'نسخ_استبدالات_قناة': 'copy_channel_emoji_replacements',
             'إضافة_قناة': 'add_channel',
             'عرض_القنوات': 'list_channels',
             'حذف_قناة': 'remove_channel',
@@ -90,6 +95,7 @@ class TelegramEmojiBot:
             
             # Load cached data
             await self.load_emoji_mappings()
+            await self.load_channel_emoji_mappings()
             await self.load_monitored_channels()
             await self.load_admin_ids()
             
@@ -109,6 +115,39 @@ class TelegramEmojiBot:
                 logger.info(f"Loaded {len(self.emoji_mappings)} emoji mappings from database")
         except Exception as e:
             logger.error(f"Failed to load emoji mappings: {e}")
+
+    async def load_channel_emoji_mappings(self):
+        """Load channel-specific emoji mappings from database into cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Create channel_emoji_replacements table if it doesn't exist
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS channel_emoji_replacements (
+                        id SERIAL PRIMARY KEY,
+                        channel_id BIGINT NOT NULL,
+                        normal_emoji TEXT NOT NULL,
+                        premium_emoji_id BIGINT NOT NULL,
+                        description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(channel_id, normal_emoji)
+                    )
+                """)
+                
+                rows = await conn.fetch("SELECT channel_id, normal_emoji, premium_emoji_id FROM channel_emoji_replacements")
+                self.channel_emoji_mappings = {}
+                for row in rows:
+                    channel_id = row['channel_id']
+                    if channel_id not in self.channel_emoji_mappings:
+                        self.channel_emoji_mappings[channel_id] = {}
+                    self.channel_emoji_mappings[channel_id][row['normal_emoji']] = row['premium_emoji_id']
+                
+                total_mappings = sum(len(mappings) for mappings in self.channel_emoji_mappings.values())
+                logger.info(f"Loaded {total_mappings} channel-specific emoji mappings for {len(self.channel_emoji_mappings)} channels")
+        except Exception as e:
+            logger.error(f"Failed to load channel emoji mappings: {e}")
 
     async def load_monitored_channels(self):
         """Load monitored channels from database into cache"""
@@ -265,6 +304,63 @@ class TelegramEmojiBot:
             logger.error(f"Failed to delete emoji replacement: {e}")
             return False
 
+    async def add_channel_emoji_replacement(self, channel_id: int, normal_emoji: str, premium_emoji_id: int, description: Optional[str] = None) -> bool:
+        """Add or update channel-specific emoji replacement in database and cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return False
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO channel_emoji_replacements (channel_id, normal_emoji, premium_emoji_id, description) 
+                       VALUES ($1, $2, $3, $4) 
+                       ON CONFLICT (channel_id, normal_emoji) 
+                       DO UPDATE SET premium_emoji_id = $3, description = $4""",
+                    channel_id, normal_emoji, premium_emoji_id, description
+                )
+                
+                # Update cache
+                if channel_id not in self.channel_emoji_mappings:
+                    self.channel_emoji_mappings[channel_id] = {}
+                self.channel_emoji_mappings[channel_id][normal_emoji] = premium_emoji_id
+                logger.info(f"Added/updated channel {channel_id} emoji replacement: {normal_emoji} -> {premium_emoji_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to add channel emoji replacement: {e}")
+            return False
+
+    async def delete_channel_emoji_replacement(self, channel_id: int, normal_emoji: str) -> bool:
+        """Delete channel-specific emoji replacement from database and cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return False
+        try:
+            async with self.db_pool.acquire() as conn:
+                result = await conn.execute(
+                    "DELETE FROM channel_emoji_replacements WHERE channel_id = $1 AND normal_emoji = $2",
+                    channel_id, normal_emoji
+                )
+                
+                if result == 'DELETE 1':
+                    # Update cache
+                    if channel_id in self.channel_emoji_mappings:
+                        self.channel_emoji_mappings[channel_id].pop(normal_emoji, None)
+                        if not self.channel_emoji_mappings[channel_id]:
+                            del self.channel_emoji_mappings[channel_id]
+                    logger.info(f"Deleted channel {channel_id} emoji replacement: {normal_emoji}")
+                    return True
+                else:
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Failed to delete channel emoji replacement: {e}")
+            return False
+
+    async def get_channel_emoji_replacements(self, channel_id: int) -> Dict[str, int]:
+        """Get all emoji replacements for a specific channel"""
+        return self.channel_emoji_mappings.get(channel_id, {})
+
     async def add_monitored_channel(self, channel_id: int, channel_username: Optional[str] = None, channel_title: Optional[str] = None) -> bool:
         """Add channel to monitoring list"""
         if self.db_pool is None:
@@ -368,9 +464,18 @@ class TelegramEmojiBot:
             import re
             
             # Create a list to track which emojis need replacement
+            # Priority: Channel-specific replacements first, then global replacements
             emojis_to_replace = {}
+            event_peer_id = utils.get_peer_id(event.chat)
+            
             for emoji in found_emojis:
-                if emoji in self.emoji_mappings:
+                # Check channel-specific replacements first
+                if (event_peer_id in self.channel_emoji_mappings and 
+                    emoji in self.channel_emoji_mappings[event_peer_id]):
+                    emojis_to_replace[emoji] = self.channel_emoji_mappings[event_peer_id][emoji]
+                    replacements_made.append(emoji)
+                # Then check global replacements
+                elif emoji in self.emoji_mappings:
                     emojis_to_replace[emoji] = self.emoji_mappings[emoji]
                     replacements_made.append(emoji)
             
@@ -906,16 +1011,272 @@ class TelegramEmojiBot:
             logger.error(f"Failed to remove admin: {e}")
             await event.reply("حدث خطأ أثناء حذف الأدمن")
 
+    async def cmd_add_channel_emoji_replacement(self, event, args: str):
+        """Handle add channel-specific emoji replacement command"""
+        try:
+            if not args.strip():
+                await event.reply("""
+📋 الاستخدام: إضافة_استبدال_قناة
+
+🔸 استبدال واحد:
+إضافة_استبدال_قناة <معرف_القناة> <إيموجي_عادي> <إيموجي_مميز> [وصف]
+
+🔸 عدة إيموجيات عادية لإيموجي مميز واحد:
+إضافة_استبدال_قناة <معرف_القناة> ✅,🟢,☑️ <إيموجي_مميز> [وصف]
+
+💡 يمكنك استخدام الإيموجي المميز مباشرة أو معرفه الرقمي
+💡 فصل الإيموجيات العادية بفاصلة (,) لربطها بنفس الإيموجي المميز
+                """.strip())
+                return
+
+            parts = args.strip().split(None, 3)
+            if len(parts) < 3:
+                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_استبدال_قناة <معرف_القناة> <إيموجي_عادي> <إيموجي_مميز> [وصف]")
+                return
+
+            try:
+                channel_id = int(parts[0])
+            except ValueError:
+                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                return
+
+            # Check if channel is monitored
+            if channel_id not in self.monitored_channels:
+                await event.reply("❌ هذه القناة غير مراقبة. أضفها أولاً باستخدام أمر إضافة_قناة")
+                return
+
+            normal_emojis_part = parts[1]
+            premium_part = parts[2]
+            description = parts[3] if len(parts) > 3 else None
+
+            # Split normal emojis by comma
+            normal_emojis = [emoji.strip() for emoji in normal_emojis_part.split(',') if emoji.strip()]
+
+            if not normal_emojis:
+                await event.reply("❌ لا توجد إيموجيات عادية صالحة")
+                return
+
+            # Get custom emojis from message
+            custom_emoji_ids = []
+            if event.message.entities:
+                for entity in event.message.entities:
+                    if isinstance(entity, MessageEntityCustomEmoji):
+                        custom_emoji_ids.append(entity.document_id)
+
+            # Determine premium emoji ID
+            premium_emoji_id = None
+            try:
+                premium_emoji_id = int(premium_part)
+            except ValueError:
+                if custom_emoji_ids:
+                    premium_emoji_id = custom_emoji_ids[0]
+                else:
+                    await event.reply("❌ لم أجد إيموجي مميز أو معرف صحيح")
+                    return
+
+            # Add replacements
+            successful_count = 0
+            failed_emojis = []
+            existing_emojis = []
+
+            for normal_emoji in normal_emojis:
+                # Check if already exists for this channel
+                if (channel_id in self.channel_emoji_mappings and 
+                    normal_emoji in self.channel_emoji_mappings[channel_id]):
+                    existing_emojis.append(normal_emoji)
+                    continue
+
+                success = await self.add_channel_emoji_replacement(channel_id, normal_emoji, premium_emoji_id, description)
+                if success:
+                    successful_count += 1
+                else:
+                    failed_emojis.append(normal_emoji)
+
+            # Prepare response
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', 'Unknown Channel')
+            
+            response_parts = []
+            if successful_count > 0:
+                emoji_list = ", ".join(normal_emojis[:successful_count])
+                response_parts.append(f"✅ تم إضافة {successful_count} استبدال للقناة {channel_name}:")
+                response_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+
+            if existing_emojis:
+                response_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
+
+            if failed_emojis:
+                response_parts.append(f"❌ فشل في إضافة: {', '.join(failed_emojis)}")
+
+            if not response_parts:
+                response_parts.append("❌ لم يتم إضافة أي استبدالات")
+
+            await event.reply("\n".join(response_parts))
+
+        except Exception as e:
+            logger.error(f"Failed to add channel emoji replacement: {e}")
+            await event.reply("حدث خطأ أثناء إضافة استبدال الإيموجي للقناة")
+
+    async def cmd_list_channel_emoji_replacements(self, event, args: str):
+        """Handle list channel-specific emoji replacements command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: عرض_استبدالات_قناة <معرف_القناة>")
+                return
+
+            try:
+                channel_id = int(args.strip())
+            except ValueError:
+                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                return
+
+            if channel_id not in self.monitored_channels:
+                await event.reply("❌ هذه القناة غير مراقبة")
+                return
+
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', 'Unknown Channel')
+            
+            channel_mappings = self.channel_emoji_mappings.get(channel_id, {})
+            
+            if not channel_mappings:
+                await event.reply(f"لا توجد استبدالات خاصة بالقناة: {channel_name}")
+                return
+
+            response_parts = [f"📋 استبدالات القناة {channel_name}:\n"]
+            fallback_parts = [f"📋 استبدالات القناة {channel_name}:\n"]
+
+            for normal_emoji, premium_id in channel_mappings.items():
+                premium_emoji_markdown = f"[💎](emoji/{premium_id})"
+                response_parts.append(f"{normal_emoji} → {premium_emoji_markdown} → (ID: {premium_id})")
+                fallback_parts.append(f"{normal_emoji} → إيموجي مميز → (ID: {premium_id})")
+
+            # Try to send with premium emojis first
+            try:
+                response_text = "\n".join(response_parts)
+                parsed_text, entities = self.parse_mode.parse(response_text)
+                await self.client.send_message(event.chat_id, parsed_text, formatting_entities=entities)
+            except Exception:
+                fallback_response = "\n".join(fallback_parts)
+                await event.reply(fallback_response)
+
+        except Exception as e:
+            logger.error(f"Failed to list channel emoji replacements: {e}")
+            await event.reply("حدث خطأ أثناء عرض استبدالات القناة")
+
+    async def cmd_delete_channel_emoji_replacement(self, event, args: str):
+        """Handle delete channel-specific emoji replacement command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: حذف_استبدال_قناة <معرف_القناة> <إيموجي>")
+                return
+
+            parts = args.strip().split(None, 1)
+            if len(parts) != 2:
+                await event.reply("❌ تنسيق غير صحيح. استخدم: حذف_استبدال_قناة <معرف_القناة> <إيموجي>")
+                return
+
+            try:
+                channel_id = int(parts[0])
+            except ValueError:
+                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                return
+
+            normal_emoji = parts[1]
+
+            if channel_id not in self.monitored_channels:
+                await event.reply("❌ هذه القناة غير مراقبة")
+                return
+
+            success = await self.delete_channel_emoji_replacement(channel_id, normal_emoji)
+            
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', 'Unknown Channel')
+
+            if success:
+                await event.reply(f"✅ تم حذف استبدال الإيموجي {normal_emoji} من القناة {channel_name}")
+            else:
+                await event.reply(f"❌ الإيموجي غير موجود في استبدالات القناة {channel_name}")
+
+        except Exception as e:
+            logger.error(f"Failed to delete channel emoji replacement: {e}")
+            await event.reply("حدث خطأ أثناء حذف استبدال الإيموجي من القناة")
+
+    async def cmd_copy_channel_emoji_replacements(self, event, args: str):
+        """Handle copy emoji replacements from one channel to another"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: نسخ_استبدالات_قناة <معرف_القناة_المصدر> <معرف_القناة_الهدف>")
+                return
+
+            parts = args.strip().split()
+            if len(parts) != 2:
+                await event.reply("❌ تنسيق غير صحيح. استخدم: نسخ_استبدالات_قناة <معرف_القناة_المصدر> <معرف_القناة_الهدف>")
+                return
+
+            try:
+                source_channel_id = int(parts[0])
+                target_channel_id = int(parts[1])
+            except ValueError:
+                await event.reply("❌ معرفات القنوات يجب أن تكون أرقاماً")
+                return
+
+            # Check if both channels are monitored
+            if source_channel_id not in self.monitored_channels:
+                await event.reply("❌ القناة المصدر غير مراقبة")
+                return
+
+            if target_channel_id not in self.monitored_channels:
+                await event.reply("❌ القناة الهدف غير مراقبة")
+                return
+
+            source_mappings = self.channel_emoji_mappings.get(source_channel_id, {})
+            if not source_mappings:
+                await event.reply("❌ لا توجد استبدالات في القناة المصدر")
+                return
+
+            # Copy replacements
+            copied_count = 0
+            failed_count = 0
+
+            for normal_emoji, premium_emoji_id in source_mappings.items():
+                success = await self.add_channel_emoji_replacement(
+                    target_channel_id, normal_emoji, premium_emoji_id, f"نسخ من القناة {source_channel_id}"
+                )
+                if success:
+                    copied_count += 1
+                else:
+                    failed_count += 1
+
+            source_name = self.monitored_channels[source_channel_id].get('title', 'Unknown')
+            target_name = self.monitored_channels[target_channel_id].get('title', 'Unknown')
+
+            response = f"✅ تم نسخ {copied_count} استبدال من {source_name} إلى {target_name}"
+            if failed_count > 0:
+                response += f"\n❌ فشل في نسخ {failed_count} استبدال"
+
+            await event.reply(response)
+
+        except Exception as e:
+            logger.error(f"Failed to copy channel emoji replacements: {e}")
+            await event.reply("حدث خطأ أثناء نسخ الاستبدالات")
+
     async def cmd_help_command(self, event, args: str):
         """Handle help command"""
         help_text = """
 🤖 أوامر بوت استبدال الإيموجي:
 
-📝 إدارة الاستبدالات:
+📝 إدارة الاستبدالات العامة:
 • إضافة_استبدال <إيموجي_عادي> <إيموجي_مميز> [وصف]
-• عرض_الاستبدالات - عرض جميع الاستبدالات
-• حذف_استبدال <إيموجي> - حذف استبدال
+• عرض_الاستبدالات - عرض جميع الاستبدالات العامة
+• حذف_استبدال <إيموجي> - حذف استبدال عام
 • تنظيف_الاستبدالات [تفصيل] - حذف الاستبدالات المكررة
+
+🎯 إدارة الاستبدالات الخاصة بالقنوات:
+• إضافة_استبدال_قناة <معرف_القناة> <إيموجي_عادي> <إيموجي_مميز> [وصف]
+• عرض_استبدالات_قناة <معرف_القناة> - عرض استبدالات قناة معينة
+• حذف_استبدال_قناة <معرف_القناة> <إيموجي> - حذف استبدال من قناة
+• نسخ_استبدالات_قناة <معرف_المصدر> <معرف_الهدف> - نسخ الاستبدالات
 
 📺 إدارة القنوات:
 • إضافة_قناة <معرف_أو_اسم_مستخدم> - إضافة قناة للمراقبة
@@ -933,7 +1294,9 @@ class TelegramEmojiBot:
 
 ❓ مساعدة - عرض هذه الرسالة
 
-ملاحظة: جميع الأوامر تعمل في الرسائل الخاصة فقط.
+ملاحظة: 
+- جميع الأوامر تعمل في الرسائل الخاصة فقط
+- الاستبدالات الخاصة بالقناة لها أولوية أعلى من الاستبدالات العامة
         """
         await event.reply(help_text.strip())
 
