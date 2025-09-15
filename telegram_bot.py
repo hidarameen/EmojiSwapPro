@@ -1305,7 +1305,7 @@ class TelegramEmojiBot:
             await event.reply("حدث خطأ أثناء حذف الأدمن")
 
     async def cmd_add_channel_emoji_replacement(self, event, args: str):
-        """Handle add channel-specific emoji replacement command"""
+        """Handle add channel-specific emoji replacement command - supports single or multiple replacements and reply messages"""
         try:
             # Check if this is a reply to a message
             reply_message = None
@@ -1321,6 +1321,12 @@ class TelegramEmojiBot:
 
 🔸 عدة إيموجيات عادية لإيموجي مميز واحد:
 إضافة_استبدال_قناة <معرف_القناة> ✅,🟢,☑️ <إيموجي_مميز> [وصف]
+
+🔸 عدة استبدالات (كل سطر منفصل):
+إضافة_استبدال_قناة <معرف_القناة>
+😀 🔥 وصف أول
+❤️,💖,💕 1234567890 وصف ثاني
+✅ ✨ وصف ثالث
 
 🔸 الرد على رسالة:
 رد على رسالة تحتوي على إيموجيات مع "إضافة_استبدال_قناة <معرف_القناة> [وصف]"
@@ -1346,13 +1352,16 @@ class TelegramEmojiBot:
                 description = parts[1] if len(parts) > 1 else None
                 return await self._handle_reply_channel_emoji_replacement(event, reply_message, channel_id, description)
 
-            parts = args.strip().split(None, 3)
-            if len(parts) < 3:
-                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_استبدال_قناة <معرف_القناة> <إيموجي_عادي> <إيموجي_مميز> [وصف]")
+            # Parse the command to get channel ID
+            lines = args.strip().split('\n')
+            first_line_parts = lines[0].split(None, 3)
+            
+            if len(first_line_parts) < 1:
+                await event.reply("❌ تنسيق غير صحيح. استخدم: إضافة_استبدال_قناة <معرف_القناة> ...")
                 return
 
             try:
-                channel_id = int(parts[0])
+                channel_id = int(first_line_parts[0])
             except ValueError:
                 await event.reply("❌ معرف القناة يجب أن يكون رقماً")
                 return
@@ -1362,81 +1371,184 @@ class TelegramEmojiBot:
                 await event.reply("❌ هذه القناة غير مراقبة. أضفها أولاً باستخدام أمر إضافة_قناة")
                 return
 
-            normal_emojis_part = parts[1]
-            premium_part = parts[2]
-            description = parts[3] if len(parts) > 3 else None
-
-            # Split normal emojis by comma
-            normal_emojis = [emoji.strip() for emoji in normal_emojis_part.split(',') if emoji.strip()]
-
-            if not normal_emojis:
-                await event.reply("❌ لا توجد إيموجيات عادية صالحة")
-                return
-
-            # Get custom emojis from message
+            # Get all custom emojis from the message
             custom_emoji_ids = []
             if event.message.entities:
                 for entity in event.message.entities:
                     if isinstance(entity, MessageEntityCustomEmoji):
                         custom_emoji_ids.append(entity.document_id)
 
-            # Determine premium emoji ID
-            premium_emoji_id = None
-            try:
-                premium_emoji_id = int(premium_part)
-            except ValueError:
-                if custom_emoji_ids:
-                    premium_emoji_id = custom_emoji_ids[0]
-                else:
-                    await event.reply("❌ لم أجد إيموجي مميز أو معرف صحيح")
+            successful_replacements = []
+            failed_replacements = []
+            custom_emoji_index = 0
+
+            # Check if this is a single-line or multi-line format
+            if len(lines) == 1 and len(first_line_parts) >= 3:
+                # Single line format: معرف_القناة إيموجي_عادي إيموجي_مميز [وصف]
+                normal_emojis_part = first_line_parts[1]
+                premium_part = first_line_parts[2]
+                description = first_line_parts[3] if len(first_line_parts) > 3 else None
+
+                # Split normal emojis by comma
+                normal_emojis = [emoji.strip() for emoji in normal_emojis_part.split(',') if emoji.strip()]
+
+                if not normal_emojis:
+                    await event.reply("❌ لا توجد إيموجيات عادية صالحة")
                     return
 
-            # Add replacements
-            successful_count = 0
-            failed_emojis = []
-            existing_emojis = []
+                # Determine premium emoji ID
+                premium_emoji_id = None
+                try:
+                    premium_emoji_id = int(premium_part)
+                except ValueError:
+                    if custom_emoji_index < len(custom_emoji_ids):
+                        premium_emoji_id = custom_emoji_ids[custom_emoji_index]
+                        custom_emoji_index += 1
+                    else:
+                        await event.reply("❌ لم أجد إيموجي مميز أو معرف صحيح")
+                        return
 
-            for normal_emoji in normal_emojis:
-                # Check if already exists for this channel
-                if (channel_id in self.channel_emoji_mappings and 
-                    normal_emoji in self.channel_emoji_mappings[channel_id]):
-                    existing_emojis.append(normal_emoji)
-                    continue
+                # Process emojis
+                new_emojis = []
+                existing_emojis = []
 
-                success = await self.add_channel_emoji_replacement(channel_id, normal_emoji, premium_emoji_id, description)
-                if success:
-                    successful_count += 1
+                for normal_emoji in normal_emojis:
+                    if (channel_id in self.channel_emoji_mappings and 
+                        normal_emoji in self.channel_emoji_mappings[channel_id]):
+                        existing_emojis.append(normal_emoji)
+                    else:
+                        new_emojis.append(normal_emoji)
+
+                # Add replacements
+                success_count = 0
+                for normal_emoji in new_emojis:
+                    success = await self.add_channel_emoji_replacement(channel_id, normal_emoji, premium_emoji_id, description)
+                    if success:
+                        success_count += 1
+
+                if success_count > 0:
+                    emoji_list = ", ".join(new_emojis[:success_count])
+                    premium_emoji_markdown = f"[💎](emoji/{premium_emoji_id})"
+                    successful_replacements.append(f"{emoji_list} → {premium_emoji_markdown} (ID: {premium_emoji_id})")
+
+                if existing_emojis:
+                    failed_replacements.append(f"موجود مسبقاً: {', '.join(existing_emojis)}")
+
+            else:
+                # Multi-line format: معرف_القناة followed by multiple lines of replacements
+                # Skip the first line if it only contains channel ID
+                if len(first_line_parts) == 1:
+                    replacement_lines = lines[1:]
                 else:
-                    failed_emojis.append(normal_emoji)
+                    # First line contains channel ID + first replacement
+                    replacement_lines = lines
+                    # Process first line as replacement if it has enough parts
+                    if len(first_line_parts) >= 3:
+                        replacement_lines[0] = ' '.join(first_line_parts[1:])
 
-            # Prepare response with premium emoji display
+                # Process each replacement line
+                for line_num, line in enumerate(replacement_lines, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # Parse line: "normal_emoji(s) premium_emoji/id description"
+                    parts = line.split(None, 2)
+                    if len(parts) < 2:
+                        failed_replacements.append(f"السطر {line_num}: تنسيق غير صحيح")
+                        continue
+
+                    normal_emojis_part = parts[0]
+                    premium_part = parts[1]
+                    description = parts[2] if len(parts) > 2 else None
+
+                    # Split normal emojis by comma
+                    normal_emojis = [emoji.strip() for emoji in normal_emojis_part.split(',') if emoji.strip()]
+
+                    if not normal_emojis:
+                        failed_replacements.append(f"السطر {line_num}: لا توجد إيموجيات عادية صالحة")
+                        continue
+
+                    # Try to determine premium emoji ID
+                    premium_emoji_id = None
+
+                    # Method 1: Try to parse as number (ID format)
+                    try:
+                        premium_emoji_id = int(premium_part)
+                    except ValueError:
+                        # Method 2: Check if it's a premium emoji in the message
+                        if custom_emoji_index < len(custom_emoji_ids):
+                            premium_emoji_id = custom_emoji_ids[custom_emoji_index]
+                            custom_emoji_index += 1
+                        else:
+                            failed_replacements.append(f"السطر {line_num}: لم أجد إيموجي مميز أو معرف صحيح")
+                            continue
+
+                    # Check which emojis are new and which already exist
+                    new_emojis = []
+                    existing_emojis = []
+
+                    for normal_emoji in normal_emojis:
+                        if (channel_id in self.channel_emoji_mappings and 
+                            normal_emoji in self.channel_emoji_mappings[channel_id]):
+                            existing_emojis.append(normal_emoji)
+                        else:
+                            new_emojis.append(normal_emoji)
+
+                    # Add replacements only for new emojis
+                    line_success_count = 0
+                    line_failed_emojis = []
+
+                    for normal_emoji in new_emojis:
+                        success = await self.add_channel_emoji_replacement(channel_id, normal_emoji, premium_emoji_id, description)
+
+                        if success:
+                            line_success_count += 1
+                        else:
+                            line_failed_emojis.append(normal_emoji)
+
+                    # Report results for this line with premium emoji display
+                    if line_success_count > 0:
+                        emoji_list = ", ".join(new_emojis[:line_success_count])
+                        premium_emoji_markdown = f"[💎](emoji/{premium_emoji_id})"
+                        successful_replacements.append(f"{emoji_list} → {premium_emoji_markdown} (ID: {premium_emoji_id})")
+
+                    if existing_emojis:
+                        existing_emoji_list = ", ".join(existing_emojis)
+                        failed_replacements.append(f"السطر {line_num}: موجود مسبقاً: {existing_emoji_list}")
+
+                    if line_failed_emojis:
+                        failed_emoji_list = ", ".join(line_failed_emojis)
+                        failed_replacements.append(f"السطر {line_num}: فشل في حفظ {failed_emoji_list}")
+
+            # Prepare response with premium emojis
             channel_info = self.monitored_channels[channel_id]
             channel_name = channel_info.get('title', 'Unknown Channel')
             
             response_parts = []
             fallback_parts = []
-            
-            if successful_count > 0:
-                emoji_list = ", ".join(normal_emojis[:successful_count])
-                premium_emoji_markdown = f"[💎](emoji/{premium_emoji_id})"
-                
-                response_parts.append(f"✅ تم إضافة {successful_count} استبدال للقناة {channel_name}:")
-                response_parts.append(f"• {emoji_list} → {premium_emoji_markdown} (ID: {premium_emoji_id})")
-                
-                fallback_parts.append(f"✅ تم إضافة {successful_count} استبدال للقناة {channel_name}:")
-                fallback_parts.append(f"• {emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
 
-            if existing_emojis:
-                response_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
-                fallback_parts.append(f"⚠️ موجود مسبقاً: {', '.join(existing_emojis)}")
+            if successful_replacements:
+                response_parts.append(f"✅ تم إضافة الاستبدالات التالية للقناة {channel_name}:")
+                fallback_parts.append(f"✅ تم إضافة الاستبدالات التالية للقناة {channel_name}:")
+                for replacement in successful_replacements:
+                    response_parts.append(f"• {replacement}")
+                    # Create fallback version
+                    fallback_parts.append(f"• {replacement.replace('[💎]', 'إيموجي مميز')}")
 
-            if failed_emojis:
-                response_parts.append(f"❌ فشل في إضافة: {', '.join(failed_emojis)}")
-                fallback_parts.append(f"❌ فشل في إضافة: {', '.join(failed_emojis)}")
+            if failed_replacements:
+                if successful_replacements:
+                    response_parts.append("")
+                    fallback_parts.append("")
+                response_parts.append("❌ فشل في إضافة الاستبدالات التالية:")
+                fallback_parts.append("❌ فشل في إضافة الاستبدالات التالية:")
+                for failure in failed_replacements:
+                    response_parts.append(f"• {failure}")
+                    fallback_parts.append(f"• {failure}")
 
-            if not response_parts:
-                response_parts.append("❌ لم يتم إضافة أي استبدالات")
-                fallback_parts.append("❌ لم يتم إضافة أي استبدالات")
+            if not successful_replacements and not failed_replacements:
+                response_parts.append("❌ لم يتم العثور على استبدالات صالحة")
+                fallback_parts.append("❌ لم يتم العثور على استبدالات صالحة")
 
             # Try to send with premium emojis first
             try:
