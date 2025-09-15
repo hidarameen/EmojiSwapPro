@@ -368,13 +368,17 @@ class TelegramEmojiBot:
 🔸 استبدال واحد:
 إضافة_استبدال <إيموجي_عادي> <إيموجي_مميز> [وصف]
 
+🔸 عدة إيموجيات عادية لإيموجي مميز واحد:
+إضافة_استبدال ✅,🟢,☑️ <إيموجي_مميز> [وصف]
+
 🔸 عدة استبدالات (كل سطر منفصل):
 إضافة_استبدال
 😀 🔥 وصف أول
-❤️ 1234567890 وصف ثاني
+❤️,💖,💕 1234567890 وصف ثاني
 ✅ ✨ وصف ثالث
 
 💡 يمكنك استخدام الإيموجي المميز مباشرة أو معرفه الرقمي
+💡 فصل الإيموجيات العادية بفاصلة (,) لربطها بنفس الإيموجي المميز
                 """.strip())
                 return
             
@@ -395,15 +399,22 @@ class TelegramEmojiBot:
                 if not line:
                     continue
                 
-                # Parse line: "normal_emoji premium_emoji/id description"
+                # Parse line: "normal_emoji(s) premium_emoji/id description"
                 parts = line.split(None, 2)
                 if len(parts) < 2:
                     failed_replacements.append(f"السطر {line_num}: تنسيق غير صحيح")
                     continue
                 
-                normal_emoji = parts[0]
+                normal_emojis_part = parts[0]
                 premium_part = parts[1]
                 description = parts[2] if len(parts) > 2 else None
+                
+                # Split normal emojis by comma to support multiple emojis
+                normal_emojis = [emoji.strip() for emoji in normal_emojis_part.split(',') if emoji.strip()]
+                
+                if not normal_emojis:
+                    failed_replacements.append(f"السطر {line_num}: لا توجد إيموجيات عادية صالحة")
+                    continue
                 
                 # Try to determine premium emoji ID
                 premium_emoji_id = None
@@ -422,13 +433,26 @@ class TelegramEmojiBot:
                         failed_replacements.append(f"السطر {line_num}: لم أجد إيموجي مميز أو معرف صحيح")
                         continue
                 
-                # Add the replacement
-                success = await self.add_emoji_replacement(normal_emoji, premium_emoji_id, description)
+                # Add replacements for all normal emojis
+                line_success_count = 0
+                line_failed_emojis = []
                 
-                if success:
-                    successful_replacements.append(f"{normal_emoji} → إيموجي مميز (ID: {premium_emoji_id})")
-                else:
-                    failed_replacements.append(f"السطر {line_num}: فشل في حفظ الاستبدال")
+                for normal_emoji in normal_emojis:
+                    success = await self.add_emoji_replacement(normal_emoji, premium_emoji_id, description)
+                    
+                    if success:
+                        line_success_count += 1
+                    else:
+                        line_failed_emojis.append(normal_emoji)
+                
+                # Report results for this line
+                if line_success_count > 0:
+                    emoji_list = ", ".join(normal_emojis[:line_success_count])
+                    successful_replacements.append(f"{emoji_list} → إيموجي مميز (ID: {premium_emoji_id})")
+                
+                if line_failed_emojis:
+                    failed_emoji_list = ", ".join(line_failed_emojis)
+                    failed_replacements.append(f"السطر {line_num}: فشل في حفظ {failed_emoji_list}")
             
             # Prepare response
             response_parts = []
