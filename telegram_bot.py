@@ -692,106 +692,64 @@ class TelegramEmojiBot:
                     logger.error(f"Media type: {type(message.media)}")
                     logger.error(f"Message ID: {message.id}")
                     
-                    # Try alternative media handling methods
-                    logger.info("Trying alternative media copy methods...")
-                    
-                    # Method 1: Try downloading and re-uploading
-                    try:
-                        logger.info("Attempting to download and re-upload media")
-                        downloaded_media = await self.client.download_media(message, bytes)
-                        if downloaded_media:
-                            await self.client.send_file(
-                                entity=target_channel_id,
-                                file=downloaded_media,
-                                caption=caption,
-                                formatting_entities=message.entities if caption else None,
-                                parse_mode=None
-                            )
-                            logger.info("Successfully sent media via download-upload method")
-                        else:
-                            raise Exception("Failed to download media")
-                            
-                    except Exception as download_error:
-                        logger.error(f"Download-upload method failed: {download_error}")
-                        
-                        # Method 2: Try direct forwarding for media
-                        logger.info("Trying fallback method: forwarding media message")
-                        try:
-                            await self.client.forward_messages(
-                                entity=target_channel_id,
-                                messages=message,
-                                from_peer=source_channel_id
-                            )
-                            logger.info("Fallback forwarding successful")
-                        except Exception as forward_error:
-                            logger.error(f"Fallback forwarding also failed: {forward_error}")
-                            # Final fallback: send caption only
-                            if caption:
-                                logger.info("Final fallback: sending caption only")
-                                await self.client.send_message(
-                                    entity=target_channel_id,
-                                    message=f"⚠️ فشل في نسخ الوسائط، النص فقط:\n\n{caption}",
-                                    parse_mode=None
-                                )
-                            else:
-                                logger.info("No caption to send as fallback")
-            else:
-                # Handle other message types like stickers, animations, etc.
-                # These don't have text formatting but may have custom properties
-                if hasattr(message, 'sticker') and message.sticker:
-                    # Copy sticker using direct send_file
-                    try:
-                        logger.info("Copying sticker directly using send_file with message.media")
-                        await self.client.send_file(
-                            entity=target_channel_id,
-                            file=message.media
-                        )
-                        logger.info("Successfully copied sticker using direct send_file")
-                    except Exception as sticker_error:
-                        logger.error(f"Failed to copy sticker directly: {sticker_error}")
-                        # Fallback to forwarding
-                        try:
-                            await self.client.forward_messages(
-                                entity=target_channel_id,
-                                messages=message,
-                                from_peer=source_channel_id
-                            )
-                            logger.info("Fallback forwarding successful for sticker")
-                        except Exception as forward_error:
-                            logger.error(f"Sticker forwarding also failed: {forward_error}")
-                elif hasattr(message, 'document') and message.document:
-                    # Copy document/file using direct send_file
-                    try:
-                        logger.info("Copying document directly using send_file with message.media")
-                        await self.client.send_file(
-                            entity=target_channel_id,
-                            file=message.media
-                        )
-                        logger.info("Successfully copied document using direct send_file")
-                    except Exception as doc_error:
-                        logger.error(f"Failed to copy document directly: {doc_error}")
-                        # Fallback to forwarding
-                        try:
-                            await self.client.forward_messages(
-                                entity=target_channel_id,
-                                messages=message,
-                                from_peer=source_channel_id
-                            )
-                            logger.info("Fallback forwarding successful for document")
-                        except Exception as forward_error:
-                            logger.error(f"Document forwarding also failed: {forward_error}")
-                else:
-                    logger.warning(f"Unsupported message type for copying from {source_channel_id}: {type(message)}")
-                    # Try generic forwarding as last resort
+                    # Try direct forwarding as immediate fallback (no download/upload)
+                    logger.info("Trying direct forwarding as fallback (no file handling)")
                     try:
                         await self.client.forward_messages(
                             entity=target_channel_id,
                             messages=message,
                             from_peer=source_channel_id
                         )
-                        logger.info("Generic forwarding successful for unsupported message type")
-                    except Exception as generic_error:
-                        logger.error(f"Generic forwarding failed: {generic_error}")
+                        logger.info("Direct forwarding successful")
+                    except Exception as forward_error:
+                        logger.error(f"Direct forwarding also failed: {forward_error}")
+                        # Final fallback: send caption only if exists
+                        if caption:
+                            logger.info("Final fallback: sending caption only")
+                            try:
+                                if needs_markdown_parse and message.entities:
+                                    parsed_caption, parsed_entities = self.parse_mode.parse(caption)
+                                    await self.client.send_message(
+                                        entity=target_channel_id,
+                                        message=f"⚠️ فشل في نسخ الوسائط، النص فقط:\n\n{parsed_caption}",
+                                        formatting_entities=parsed_entities,
+                                        parse_mode=None
+                                    )
+                                else:
+                                    await self.client.send_message(
+                                        entity=target_channel_id,
+                                        message=f"⚠️ فشل في نسخ الوسائط، النص فقط:\n\n{caption}",
+                                        formatting_entities=message.entities if caption else None,
+                                        parse_mode=None
+                                    )
+                            except Exception as caption_error:
+                                logger.error(f"Failed to send caption fallback: {caption_error}")
+                        else:
+                            logger.info("No caption available for fallback")
+            else:
+                # Handle other message types like stickers, animations, etc.
+                # Use direct send_file for all media types without downloading
+                logger.info(f"Handling other media type: {type(message.media)}")
+                try:
+                    await self.client.send_file(
+                        entity=target_channel_id,
+                        file=message.media,
+                        supports_streaming=True,
+                        force_document=False  # Keep original media type
+                    )
+                    logger.info("Successfully sent other media type using direct send_file")
+                except Exception as other_media_error:
+                    logger.error(f"Failed to send other media type: {other_media_error}")
+                    # Immediate fallback to forwarding (no download attempts)
+                    try:
+                        await self.client.forward_messages(
+                            entity=target_channel_id,
+                            messages=message,
+                            from_peer=source_channel_id
+                        )
+                        logger.info("Fallback forwarding successful for other media")
+                    except Exception as forward_error:
+                        logger.error(f"All methods failed for other media: {forward_error}")
                         return
             
             logger.info(f"Successfully processed message from {source_channel_id} to {target_channel_id}")
