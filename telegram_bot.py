@@ -72,10 +72,12 @@ class TelegramEmojiBot:
             'إضافة_استبدال': 'add_emoji_replacement',
             'عرض_الاستبدالات': 'list_emoji_replacements', 
             'حذف_استبدال': 'delete_emoji_replacement',
+            'حذف_جميع_الاستبدالات': 'delete_all_emoji_replacements',
             'تنظيف_الاستبدالات': 'clean_duplicate_replacements',
             'إضافة_استبدال_قناة': 'add_channel_emoji_replacement',
             'عرض_استبدالات_قناة': 'list_channel_emoji_replacements',
             'حذف_استبدال_قناة': 'delete_channel_emoji_replacement',
+            'حذف_جميع_استبدالات_قناة': 'delete_all_channel_emoji_replacements',
             'نسخ_استبدالات_قناة': 'copy_channel_emoji_replacements',
             'إضافة_قناة': 'add_channel',
             'عرض_القنوات': 'list_channels',
@@ -304,6 +306,28 @@ class TelegramEmojiBot:
             logger.error(f"Failed to delete emoji replacement: {e}")
             return False
 
+    async def delete_all_emoji_replacements(self) -> int:
+        """Delete all global emoji replacements from database and cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return 0
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Get count before deletion
+                count_result = await conn.fetchval("SELECT COUNT(*) FROM emoji_replacements")
+                
+                # Delete all replacements
+                await conn.execute("DELETE FROM emoji_replacements")
+                
+                # Clear cache
+                self.emoji_mappings.clear()
+                logger.info(f"Deleted all {count_result} emoji replacements")
+                return count_result
+                
+        except Exception as e:
+            logger.error(f"Failed to delete all emoji replacements: {e}")
+            return 0
+
     async def add_channel_emoji_replacement(self, channel_id: int, normal_emoji: str, premium_emoji_id: int, description: Optional[str] = None) -> bool:
         """Add or update channel-specific emoji replacement in database and cache"""
         if self.db_pool is None:
@@ -356,6 +380,36 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to delete channel emoji replacement: {e}")
             return False
+
+    async def delete_all_channel_emoji_replacements(self, channel_id: int) -> int:
+        """Delete all emoji replacements for a specific channel from database and cache"""
+        if self.db_pool is None:
+            logger.error("Database pool not initialized")
+            return 0
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Get count before deletion
+                count_result = await conn.fetchval(
+                    "SELECT COUNT(*) FROM channel_emoji_replacements WHERE channel_id = $1",
+                    channel_id
+                )
+                
+                # Delete all replacements for this channel
+                await conn.execute(
+                    "DELETE FROM channel_emoji_replacements WHERE channel_id = $1",
+                    channel_id
+                )
+                
+                # Clear cache for this channel
+                if channel_id in self.channel_emoji_mappings:
+                    del self.channel_emoji_mappings[channel_id]
+                    
+                logger.info(f"Deleted all {count_result} emoji replacements for channel {channel_id}")
+                return count_result
+                
+        except Exception as e:
+            logger.error(f"Failed to delete all channel emoji replacements: {e}")
+            return 0
 
     async def get_channel_emoji_replacements(self, channel_id: int) -> Dict[str, int]:
         """Get all emoji replacements for a specific channel"""
@@ -756,6 +810,38 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to delete emoji replacement: {e}")
             await event.reply("حدث خطأ أثناء حذف استبدال الإيموجي")
+
+    async def cmd_delete_all_emoji_replacements(self, event, args: str):
+        """Handle delete all emoji replacements command"""
+        try:
+            # Check if user provided confirmation
+            if args.strip().lower() != "تأكيد":
+                await event.reply("""
+⚠️ تحذير: هذا الأمر سيحذف جميع الاستبدالات العامة!
+
+📊 الاستبدالات الحالية: {} استبدال
+
+🔴 لتأكيد الحذف، أرسل:
+حذف_جميع_الاستبدالات تأكيد
+
+💡 يمكنك استخدام أمر "عرض_الاستبدالات" لرؤية القائمة قبل الحذف
+                """.format(len(self.emoji_mappings)).strip())
+                return
+            
+            if not self.emoji_mappings:
+                await event.reply("لا توجد استبدالات عامة لحذفها")
+                return
+            
+            deleted_count = await self.delete_all_emoji_replacements()
+            
+            if deleted_count > 0:
+                await event.reply(f"✅ تم حذف جميع الاستبدالات العامة بنجاح!\n🗑️ المحذوف: {deleted_count} استبدال")
+            else:
+                await event.reply("❌ فشل في حذف الاستبدالات")
+                
+        except Exception as e:
+            logger.error(f"Failed to delete all emoji replacements: {e}")
+            await event.reply("حدث خطأ أثناء حذف جميع الاستبدالات")
 
     async def cmd_clean_duplicate_replacements(self, event, args: str):
         """Clean duplicate emoji replacements and show detailed analysis"""
@@ -1202,6 +1288,62 @@ class TelegramEmojiBot:
             logger.error(f"Failed to delete channel emoji replacement: {e}")
             await event.reply("حدث خطأ أثناء حذف استبدال الإيموجي من القناة")
 
+    async def cmd_delete_all_channel_emoji_replacements(self, event, args: str):
+        """Handle delete all channel-specific emoji replacements command"""
+        try:
+            if not args.strip():
+                await event.reply("الاستخدام: حذف_جميع_استبدالات_قناة <معرف_القناة> تأكيد")
+                return
+
+            parts = args.strip().split()
+            if len(parts) < 1:
+                await event.reply("❌ تنسيق غير صحيح. استخدم: حذف_جميع_استبدالات_قناة <معرف_القناة> تأكيد")
+                return
+
+            try:
+                channel_id = int(parts[0])
+            except ValueError:
+                await event.reply("❌ معرف القناة يجب أن يكون رقماً")
+                return
+
+            if channel_id not in self.monitored_channels:
+                await event.reply("❌ هذه القناة غير مراقبة")
+                return
+
+            channel_info = self.monitored_channels[channel_id]
+            channel_name = channel_info.get('title', 'Unknown Channel')
+            current_count = len(self.channel_emoji_mappings.get(channel_id, {}))
+
+            # Check if user provided confirmation
+            if len(parts) < 2 or parts[1].lower() != "تأكيد":
+                await event.reply(f"""
+⚠️ تحذير: هذا الأمر سيحذف جميع الاستبدالات الخاصة بالقناة!
+
+📺 القناة: {channel_name}
+📊 الاستبدالات الحالية: {current_count} استبدال
+
+🔴 لتأكيد الحذف، أرسل:
+حذف_جميع_استبدالات_قناة {channel_id} تأكيد
+
+💡 يمكنك استخدام "عرض_استبدالات_قناة {channel_id}" لرؤية القائمة قبل الحذف
+                """.strip())
+                return
+
+            if current_count == 0:
+                await event.reply(f"لا توجد استبدالات خاصة بالقناة {channel_name} لحذفها")
+                return
+
+            deleted_count = await self.delete_all_channel_emoji_replacements(channel_id)
+
+            if deleted_count > 0:
+                await event.reply(f"✅ تم حذف جميع الاستبدالات الخاصة بالقناة {channel_name} بنجاح!\n🗑️ المحذوف: {deleted_count} استبدال")
+            else:
+                await event.reply(f"❌ فشل في حذف استبدالات القناة {channel_name}")
+
+        except Exception as e:
+            logger.error(f"Failed to delete all channel emoji replacements: {e}")
+            await event.reply("حدث خطأ أثناء حذف جميع استبدالات القناة")
+
     async def cmd_copy_channel_emoji_replacements(self, event, args: str):
         """Handle copy emoji replacements from one channel to another"""
         try:
@@ -1270,12 +1412,14 @@ class TelegramEmojiBot:
 • إضافة_استبدال <إيموجي_عادي> <إيموجي_مميز> [وصف]
 • عرض_الاستبدالات - عرض جميع الاستبدالات العامة
 • حذف_استبدال <إيموجي> - حذف استبدال عام
+• حذف_جميع_الاستبدالات تأكيد - حذف جميع الاستبدالات العامة
 • تنظيف_الاستبدالات [تفصيل] - حذف الاستبدالات المكررة
 
 🎯 إدارة الاستبدالات الخاصة بالقنوات:
 • إضافة_استبدال_قناة <معرف_القناة> <إيموجي_عادي> <إيموجي_مميز> [وصف]
 • عرض_استبدالات_قناة <معرف_القناة> - عرض استبدالات قناة معينة
 • حذف_استبدال_قناة <معرف_القناة> <إيموجي> - حذف استبدال من قناة
+• حذف_جميع_استبدالات_قناة <معرف_القناة> تأكيد - حذف جميع استبدالات القناة
 • نسخ_استبدالات_قناة <معرف_المصدر> <معرف_الهدف> - نسخ الاستبدالات
 
 📺 إدارة القنوات:
@@ -1297,6 +1441,7 @@ class TelegramEmojiBot:
 ملاحظة: 
 - جميع الأوامر تعمل في الرسائل الخاصة فقط
 - الاستبدالات الخاصة بالقناة لها أولوية أعلى من الاستبدالات العامة
+- أوامر الحذف الشامل تتطلب كلمة "تأكيد" لتجنب الحذف الخطأ
         """
         await event.reply(help_text.strip())
 
