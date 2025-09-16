@@ -1685,10 +1685,10 @@ class TelegramEmojiBot:
     def _smart_emoji_replacement(self, text: str, emoji: str, replacement: str) -> str:
         """
         Smart emoji replacement that:
-        1. Extracts emojis from code blocks and links (removes formatting from emojis)
-        2. Preserves formatting for non-emoji text
-        3. Handles nested brackets in links
-        4. Ensures the replacement emoji is placed WITHOUT any formatting
+        1. Removes formatting from code blocks and hidden links ONLY when they contain emojis
+        2. Converts formatted text containing emojis to plain text
+        3. Preserves other formatting types (bold, italic, etc.)
+        4. Replaces emojis with premium versions
         """
         import re
         
@@ -1701,91 +1701,45 @@ class TelegramEmojiBot:
         # Pattern to find markdown links [text](url)
         link_pattern = r'\[([^\[\]]*)\]\(([^\)]*)\)'
         
-        # First, handle emojis inside code blocks - extract them outside
-        def extract_emoji_from_code(match):
+        # First, handle emojis inside code blocks - convert to plain text
+        def convert_code_with_emoji_to_plain(match):
             code_content = match.group(1)
             
             if emoji in code_content:
-                logger.debug(f"Found emoji in code block: {match.group()}")
+                logger.debug(f"Found emoji in code block, converting to plain text: {match.group()}")
                 
-                # Extract emoji from code and place it outside WITHOUT formatting
-                parts = code_content.split(emoji)
-                
-                if len(parts) == 2:
-                    before_emoji = parts[0]
-                    after_emoji = parts[1]
-                    
-                    result_parts = []
-                    
-                    # Add emoji replacement WITHOUT markdown formatting first
-                    result_parts.append(replacement)
-                    
-                    # Then add remaining code content if any
-                    remaining_code = (before_emoji + after_emoji).strip()
-                    if remaining_code:
-                        result_parts.append(f"`{remaining_code}`")
-                    
-                    return "".join(result_parts)
-                else:
-                    # Multiple emojis - extract each one
-                    new_content = code_content
-                    
-                    # Count and remove all emojis
-                    emoji_count = new_content.count(emoji)
-                    new_content = new_content.replace(emoji, "")
-                    
-                    result_parts = []
-                    
-                    # Add extracted emojis WITHOUT formatting first
-                    for _ in range(emoji_count):
-                        result_parts.append(replacement)
-                    
-                    # Then add remaining code if any
-                    if new_content.strip():
-                        result_parts.append(f"`{new_content}`")
-                    
-                    return "".join(result_parts)
+                # Convert code block containing emoji to plain text and replace emoji
+                plain_text = code_content.replace(emoji, replacement)
+                return plain_text
             
+            # No emoji found, keep original formatting
             return match.group()
         
-        # Apply emoji extraction from code blocks
-        result_text = re.sub(code_pattern, extract_emoji_from_code, result_text)
+        # Apply code block conversion
+        result_text = re.sub(code_pattern, convert_code_with_emoji_to_plain, result_text)
         
-        # Second, handle emojis inside markdown links - extract them outside
-        def extract_emoji_from_link(match):
+        # Second, handle emojis inside markdown links - convert to plain text
+        def convert_link_with_emoji_to_plain(match):
             link_text = match.group(1)
             link_url = match.group(2)
             
             if emoji in link_text:
-                logger.debug(f"Found emoji in link: {match.group()}")
+                logger.debug(f"Found emoji in hidden link, converting to plain text: {match.group()}")
                 
-                # Count emojis for proper replacement
-                emoji_count = link_text.count(emoji)
-                
-                # Remove all emojis from link text
-                remaining_text = link_text.replace(emoji, "").strip()
-                
-                result_parts = []
-                
-                # Add extracted emojis first (outside of any formatting)
-                for _ in range(emoji_count):
-                    result_parts.append(replacement)
-                
-                # Then add the remaining text with proper link formatting if any text remains
-                if remaining_text:
-                    result_parts.append(f"[{remaining_text}]({link_url})")
-                
-                return "".join(result_parts)
+                # Convert link containing emoji to plain text and replace emoji
+                plain_text = link_text.replace(emoji, replacement)
+                return plain_text
             
+            # No emoji found, keep original formatting
             return match.group()
         
-        # Apply emoji extraction from links
-        result_text = re.sub(link_pattern, extract_emoji_from_link, result_text)
+        # Apply link conversion
+        result_text = re.sub(link_pattern, convert_link_with_emoji_to_plain, result_text)
         
         # Finally, handle any remaining emojis in unformatted text
         result_text = re.sub(escaped_emoji, replacement, result_text)
         
-        # Clean up any double spaces or formatting artifacts
+        # Clean up any double spaces
         result_text = re.sub(r'\s+', ' ', result_text)
         result_text = result_text.strip()
         
