@@ -530,7 +530,7 @@ class TelegramEmojiBot:
                             'file': message.media,
                             'supports_streaming': True,
                             'force_document': False,  # Keep original media type
-                            'parse_mode': None  # Use raw entities
+                            'parse_mode': None  # Use raw entities - this is crucial!
                         }
                         
                         # Add caption and entities if they exist
@@ -539,38 +539,85 @@ class TelegramEmojiBot:
                             
                             # Preserve all caption entities exactly as they are
                             if message.entities:
-                                logger.info(f"Preserving {len(message.entities)} caption formatting entities")
+                                logger.info(f"Preserving {len(message.entities)} caption formatting entities for media")
+                                # Log each entity type for debugging
+                                for entity in message.entities:
+                                    entity_type = type(entity).__name__
+                                    if hasattr(entity, 'document_id'):
+                                        logger.info(f"  - Premium Emoji: {entity_type} at offset {entity.offset}, length {entity.length}, ID: {entity.document_id}")
+                                    else:
+                                        logger.info(f"  - Formatting: {entity_type} at offset {entity.offset}, length {entity.length}")
+                                
+                                # Use formatting_entities parameter for caption formatting
                                 send_file_kwargs['formatting_entities'] = message.entities
                             
-                            logger.info(f"Sending media with caption: '{caption[:50]}{'...' if len(caption) > 50 else ''}'")
+                            logger.info(f"Sending media with formatted caption: '{caption[:50]}{'...' if len(caption) > 50 else ''}'")
                         else:
                             logger.info("Sending media without caption")
                         
                         # Send the file with all parameters
                         await self.client.send_file(**send_file_kwargs)
-                        logger.info("Successfully sent media with preserved caption and formatting")
+                        logger.info("Successfully sent media with preserved caption formatting and entities")
                         
                     except Exception as primary_error:
                         logger.warning(f"Primary send_file method failed: {primary_error}")
                         
-                        # Fallback 1: Try without entities but keep caption
+                        # Fallback 1: Try with parse_mode='markdown' for caption formatting
                         if caption:
                             try:
-                                logger.info("Fallback: Sending media with caption but without entities")
-                                await self.client.send_file(
-                                    entity=target_channel_id,
-                                    file=message.media,
-                                    caption=caption,
-                                    supports_streaming=True,
-                                    force_document=False,
-                                    parse_mode=None
-                                )
-                                logger.info("Fallback 1 successful: media sent with caption (no entities)")
+                                logger.info("Fallback 1: Trying with markdown parse mode for caption")
+                                
+                                # Check if caption contains markdown or premium emojis that need parsing
+                                needs_parsing = False
+                                if message.entities:
+                                    for entity in message.entities:
+                                        if hasattr(entity, 'document_id'):  # Premium emoji
+                                            needs_parsing = True
+                                            break
+                                
+                                if needs_parsing:
+                                    # Parse caption with custom parse mode to preserve premium emojis
+                                    try:
+                                        parsed_caption, parsed_entities = self.parse_mode.parse(caption)
+                                        await self.client.send_file(
+                                            entity=target_channel_id,
+                                            file=message.media,
+                                            caption=parsed_caption,
+                                            formatting_entities=parsed_entities,
+                                            supports_streaming=True,
+                                            force_document=False,
+                                            parse_mode=None
+                                        )
+                                        logger.info("Fallback 1 successful: media sent with parsed caption")
+                                    except Exception as parse_error:
+                                        logger.warning(f"Failed to parse caption: {parse_error}")
+                                        # Try with original entities
+                                        await self.client.send_file(
+                                            entity=target_channel_id,
+                                            file=message.media,
+                                            caption=caption,
+                                            formatting_entities=message.entities,
+                                            supports_streaming=True,
+                                            force_document=False,
+                                            parse_mode=None
+                                        )
+                                        logger.info("Fallback 1b successful: media sent with original entities")
+                                else:
+                                    # No special entities, send normally
+                                    await self.client.send_file(
+                                        entity=target_channel_id,
+                                        file=message.media,
+                                        caption=caption,
+                                        supports_streaming=True,
+                                        force_document=False,
+                                        parse_mode=None
+                                    )
+                                    logger.info("Fallback 1c successful: media sent with plain caption")
                                 
                             except Exception as fallback1_error:
                                 logger.warning(f"Fallback 1 failed: {fallback1_error}")
                                 
-                                # Fallback 2: Try without caption
+                                # Fallback 2: Try without caption, then send caption separately
                                 try:
                                     logger.info("Fallback 2: Sending media without caption")
                                     await self.client.send_file(
@@ -581,26 +628,31 @@ class TelegramEmojiBot:
                                     )
                                     logger.info("Fallback 2 successful: media sent without caption")
                                     
-                                    # If media was sent successfully but without caption, send caption as separate message
+                                    # Send caption as separate message with full formatting preservation
                                     if caption:
                                         try:
                                             await asyncio.sleep(0.5)  # Small delay
-                                            logger.info("Sending caption as separate message")
+                                            logger.info("Sending formatted caption as separate message")
+                                            
+                                            # Use the same logic as text messages for caption formatting
                                             if message.entities:
                                                 await self.client.send_message(
                                                     entity=target_channel_id,
                                                     message=caption,
                                                     formatting_entities=message.entities,
-                                                    parse_mode=None
+                                                    parse_mode=None,
+                                                    link_preview=False
                                                 )
+                                                logger.info("Formatted caption sent as separate message with entities")
                                             else:
                                                 await self.client.send_message(
                                                     entity=target_channel_id,
-                                                    message=caption
+                                                    message=caption,
+                                                    parse_mode=None
                                                 )
-                                            logger.info("Caption sent as separate message")
+                                                logger.info("Plain caption sent as separate message")
                                         except Exception as caption_error:
-                                            logger.error(f"Failed to send caption as separate message: {caption_error}")
+                                            logger.error(f"Failed to send formatted caption as separate message: {caption_error}")
                                     
                                 except Exception as fallback2_error:
                                     logger.error(f"All media sending methods failed: {fallback2_error}")
