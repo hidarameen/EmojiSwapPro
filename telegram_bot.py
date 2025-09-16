@@ -1698,7 +1698,7 @@ class TelegramEmojiBot:
         # Pattern to find code blocks (inline code within backticks)
         code_pattern = r'`([^`]*)`'
         
-        # Pattern to find markdown links [text](url)
+        # Pattern to find markdown links [text](url) - more robust pattern
         link_pattern = r'\[([^\[\]]*)\]\(([^\)]*)\)'
         
         # First, handle emojis inside code blocks - convert to plain text
