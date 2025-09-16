@@ -1646,6 +1646,107 @@ class TelegramEmojiBot:
         logger.info(f"Final unique emojis/symbols: {unique_emojis}")
         return unique_emojis
 
+    def _smart_emoji_replacement(self, text: str, emoji: str, replacement: str) -> str:
+        """
+        Smart emoji replacement that avoids:
+        1. Code blocks (text within backticks ``)
+        2. Nested brackets in links [text](url)
+        """
+        import re
+        
+        # Find all protected regions where we should NOT replace emojis
+        protected_regions = []
+        
+        # 1. Find all code blocks (inline code within backticks)
+        code_pattern = r'`[^`]*`'
+        for match in re.finditer(code_pattern, text):
+            protected_regions.append((match.start(), match.end()))
+            logger.debug(f"Protected code block: {match.group()} at {match.start()}-{match.end()}")
+        
+        # 2. Find all existing markdown links [text](url)
+        link_pattern = r'\[([^\[\]]*)\]\([^\)]*\)'
+        
+        # For existing links, we need special handling
+        result_text = text
+        escaped_emoji = re.escape(emoji)
+        
+        # First, handle emojis inside existing markdown links
+        def replace_emoji_in_link(match):
+            link_text = match.group(1)  # The text part of [text](url)
+            link_url = match.group(2)   # The URL part
+            
+            # Replace emoji only in the link text, not in the URL
+            if emoji in link_text:
+                # Check if this link region overlaps with any protected region
+                link_start = match.start()
+                link_end = match.end()
+                
+                # Check if this link is in a protected region (like code block)
+                is_protected = any(
+                    protected_start <= link_start < protected_end or
+                    protected_start < link_end <= protected_end
+                    for protected_start, protected_end in protected_regions
+                )
+                
+                if is_protected:
+                    logger.debug(f"Skipping emoji replacement in protected link: {match.group()}")
+                    return match.group()  # Return unchanged
+                
+                # Replace emoji in link text
+                new_link_text = link_text.replace(emoji, replacement)
+                logger.debug(f"Replacing emoji in link text: '{link_text}' -> '{new_link_text}'")
+                return f"[{new_link_text}]({link_url})"
+            
+            return match.group()  # Return unchanged
+        
+        # Replace emojis within existing markdown links
+        result_text = re.sub(r'\[([^\[\]]*)\]\(([^\)]*)\)', replace_emoji_in_link, result_text)
+        
+        # Now handle emojis outside of links and code blocks
+        # We need to track new protected regions after link processing
+        current_protected_regions = []
+        
+        # Re-find code blocks in the updated text
+        for match in re.finditer(code_pattern, result_text):
+            current_protected_regions.append((match.start(), match.end()))
+            
+        # Find all link regions in the updated text
+        for match in re.finditer(r'\[[^\[\]]*\]\([^\)]*\)', result_text):
+            current_protected_regions.append((match.start(), match.end()))
+            
+        # Sort protected regions by start position
+        current_protected_regions.sort(key=lambda x: x[0])
+        
+        # Split text into segments and process only unprotected segments
+        if current_protected_regions:
+            segments = []
+            last_end = 0
+            
+            for region_start, region_end in current_protected_regions:
+                # Add unprotected segment before this region
+                if last_end < region_start:
+                    unprotected_segment = result_text[last_end:region_start]
+                    # Replace emoji in unprotected segment
+                    replaced_segment = re.sub(escaped_emoji, replacement, unprotected_segment)
+                    segments.append(replaced_segment)
+                
+                # Add the protected region unchanged
+                segments.append(result_text[region_start:region_end])
+                last_end = region_end
+            
+            # Add any remaining unprotected segment
+            if last_end < len(result_text):
+                unprotected_segment = result_text[last_end:]
+                replaced_segment = re.sub(escaped_emoji, replacement, unprotected_segment)
+                segments.append(replaced_segment)
+            
+            result_text = ''.join(segments)
+        else:
+            # No protected regions, safe to replace everywhere
+            result_text = re.sub(escaped_emoji, replacement, result_text)
+        
+        return result_text
+
     async def replace_emojis_in_message(self, event):
         """Replace normal emojis with premium emojis in a message"""
         try:
@@ -1710,7 +1811,7 @@ class TelegramEmojiBot:
             if not emojis_to_replace:
                 return
             
-            # Use regex to replace emojis one by one to avoid conflicts
+            # Use smart replacement to avoid conflicts with code blocks and links
             for normal_emoji, premium_emoji_id in emojis_to_replace.items():
                 # Escape special regex characters in emoji
                 escaped_emoji = re.escape(normal_emoji)
@@ -1720,8 +1821,8 @@ class TelegramEmojiBot:
                 occurrence_count = len(re.findall(escaped_emoji, modified_text))
                 logger.info(f"Replacing {occurrence_count} occurrences of {normal_emoji} with premium emoji ID {premium_emoji_id}")
                 
-                # Replace all occurrences of this specific emoji
-                modified_text = re.sub(escaped_emoji, premium_emoji_markdown, modified_text)
+                # Smart replacement that avoids code blocks and handles links properly
+                modified_text = self._smart_emoji_replacement(modified_text, normal_emoji, premium_emoji_markdown)
                 logger.info(f"Text after replacing {normal_emoji}: '{modified_text}'")
             
             # If replacements were made, edit the message
