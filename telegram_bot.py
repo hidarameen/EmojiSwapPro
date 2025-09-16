@@ -1685,62 +1685,66 @@ class TelegramEmojiBot:
     def _smart_emoji_replacement(self, text: str, emoji: str, replacement: str) -> str:
         """
         Smart emoji replacement that:
-        1. Handles emojis inside code blocks and hidden links by converting ONLY the formatting to plain text
-        2. Preserves other formatting types (bold, italic, etc.)  
-        3. Replaces emojis with premium versions
+        1. Converts code blocks containing emojis to plain text
+        2. Converts hidden links containing emojis to plain text  
+        3. Replaces emojis with premium versions in other contexts
         """
         import re
         
-        escaped_emoji = re.escape(emoji)
-        result_text = text
+        logger.info(f"Starting smart replacement for emoji '{emoji}' in text: '{text}'")
         
-        # Pattern to find code blocks (inline code within backticks)
+        # Pattern for code blocks (inline code within backticks)
         code_pattern = r'`([^`]*)`'
         
-        # Pattern to find markdown links [text](url)
-        link_pattern = r'\[([^\[\]]*)\]\(([^\)]*)\)'
+        # Pattern for markdown links [text](url) - more precise
+        link_pattern = r'\[([^\]]*)\]\(([^\)]*)\)'
         
-        # First, handle emojis inside code blocks - convert to plain text ONLY if emoji exists
-        def convert_code_with_emoji_to_plain(match):
+        # First pass: handle code blocks with emojis
+        def handle_code_blocks(match):
             code_content = match.group(1)
-            
             if emoji in code_content:
-                logger.debug(f"Found emoji {emoji} in code block, converting to plain text with replacement")
-                # Remove code formatting and replace emoji
-                plain_text = code_content.replace(emoji, replacement)
-                return plain_text
-            
-            # No emoji found, keep original formatting
+                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - converting to plain text")
+                # Convert to plain text and replace emoji
+                plain_result = code_content.replace(emoji, replacement)
+                logger.info(f"Code block converted to plain text: '{plain_result}'")
+                return plain_result
+            # Keep original if no target emoji
             return match.group(0)
         
-        # Apply code block conversion
-        result_text = re.sub(code_pattern, convert_code_with_emoji_to_plain, result_text)
+        # Apply code block handling
+        text = re.sub(code_pattern, handle_code_blocks, text)
+        logger.info(f"After code block processing: '{text}'")
         
-        # Second, handle emojis inside markdown links - convert to plain text ONLY if emoji exists  
-        def convert_link_with_emoji_to_plain(match):
+        # Second pass: handle markdown links with emojis
+        def handle_links(match):
             link_text = match.group(1)
             link_url = match.group(2)
             
             if emoji in link_text:
-                logger.debug(f"Found emoji {emoji} in hidden link text, converting to plain text with replacement")
-                # Remove link formatting and replace emoji - keep only the text part
-                plain_text = link_text.replace(emoji, replacement)
-                return plain_text
-            
-            # No emoji found, keep original formatting
+                logger.info(f"Found emoji '{emoji}' in link text: '[{link_text}]({link_url})' - converting to plain text")
+                # Convert to plain text and replace emoji - only keep the text part
+                plain_result = link_text.replace(emoji, replacement)
+                logger.info(f"Link converted to plain text: '{plain_result}'")
+                return plain_result
+            # Keep original if no target emoji
             return match.group(0)
         
-        # Apply link conversion
-        result_text = re.sub(link_pattern, convert_link_with_emoji_to_plain, result_text)
+        # Apply link handling
+        text = re.sub(link_pattern, handle_links, text)
+        logger.info(f"After link processing: '{text}'")
         
-        # Finally, handle any remaining emojis in unformatted text
-        result_text = re.sub(escaped_emoji, replacement, result_text)
+        # Third pass: replace any remaining emojis in normal text
+        escaped_emoji = re.escape(emoji)
+        original_count = len(re.findall(escaped_emoji, text))
+        if original_count > 0:
+            text = re.sub(escaped_emoji, replacement, text)
+            logger.info(f"Replaced {original_count} remaining '{emoji}' with '{replacement}' in normal text")
         
-        # Clean up any excessive spaces but preserve single spaces
-        result_text = re.sub(r' {2,}', ' ', result_text)
-        result_text = result_text.strip()
+        # Clean up excessive whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
         
-        return result_text
+        logger.info(f"Final result after smart replacement: '{text}'")
+        return text
 
     async def replace_emojis_in_message(self, event):
         """Replace normal emojis with premium emojis in a message"""
