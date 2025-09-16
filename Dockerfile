@@ -26,14 +26,11 @@ COPY requirements-docker.txt requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
-COPY telegram_bot.py .
-COPY custom_parse_mode.py .
-COPY generate_session.py .
-COPY start.sh .
+# Copy entire project directory
+COPY . .
 
-# Make startup script executable
-RUN chmod +x start.sh
+# Make all shell scripts executable
+RUN find . -name "*.sh" -type f -exec chmod +x {} \;
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash --uid 1000 botuser && \
