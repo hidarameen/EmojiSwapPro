@@ -509,6 +509,10 @@ class TelegramEmojiBot:
         This ensures both premium emojis and formatting (bold, italic, etc.) are preserved.
         Used by both text messages and media captions for consistent behavior.
         """
+        # If no text content, return empty
+        if not text_content:
+            return text_content, message_entities or []
+        
         # Check if the text contains markdown-style formatting (like **text**)
         # that needs to be converted to proper Telegram entities
         needs_markdown_parse = False
@@ -517,36 +521,48 @@ class TelegramEmojiBot:
             '[' in text_content and '](' in text_content):
             needs_markdown_parse = True
         
+        # Always preserve original entities, especially custom emojis
+        original_entities = message_entities or []
+        
         # If we have entities and need markdown parsing, merge them properly
-        if message_entities and needs_markdown_parse:
+        if original_entities and needs_markdown_parse:
             try:
                 # Parse the text with markdown to get proper formatting entities
                 parsed_text, parsed_entities = self.parse_mode.parse(text_content)
                 
-                # Merge existing custom emoji entities with new formatting entities
+                # Merge existing entities with new formatting entities
                 final_entities = []
                 
-                # Add custom emoji entities from the original message
-                for entity in message_entities:
-                    if isinstance(entity, MessageEntityCustomEmoji):
-                        final_entities.append(entity)
+                # Add all original entities (including custom emojis and existing formatting)
+                for entity in original_entities:
+                    final_entities.append(entity)
                 
-                # Add formatting entities from markdown parsing (but skip custom emojis to avoid duplicates)
-                for entity in parsed_entities:
-                    if not isinstance(entity, MessageEntityCustomEmoji):
-                        final_entities.append(entity)
+                # Add new formatting entities from markdown parsing
+                # but avoid duplicates by checking for overlaps
+                for new_entity in parsed_entities:
+                    # Check if this entity overlaps with any existing entity
+                    overlaps = False
+                    for existing_entity in final_entities:
+                        if (new_entity.offset < existing_entity.offset + existing_entity.length and
+                            new_entity.offset + new_entity.length > existing_entity.offset):
+                            overlaps = True
+                            break
+                    
+                    # Only add if no overlap and it's not a duplicate type
+                    if not overlaps:
+                        final_entities.append(new_entity)
                 
                 # Sort entities by offset to maintain proper order
                 final_entities.sort(key=lambda e: e.offset)
                 
-                logger.info(f"Merged entities: {len(final_entities)} total entities (from {len(message_entities)} original + {len(parsed_entities)} parsed)")
+                logger.info(f"Merged entities: {len(final_entities)} total entities (from {len(original_entities)} original + {len(parsed_entities)} parsed, after overlap removal)")
                 return parsed_text, final_entities
                 
             except Exception as parse_error:
                 logger.warning(f"Failed to parse markdown for entity merging, using original entities: {parse_error}")
                 # Fallback to original entities
-                return text_content, message_entities
-        elif needs_markdown_parse and not message_entities:
+                return text_content, original_entities
+        elif needs_markdown_parse and not original_entities:
             # No existing entities, but text has markdown - parse it
             try:
                 parsed_text, parsed_entities = self.parse_mode.parse(text_content)
@@ -557,7 +573,8 @@ class TelegramEmojiBot:
                 return text_content, []
         else:
             # No markdown parsing needed, use entities as-is
-            return text_content, message_entities or []
+            logger.info(f"No markdown parsing needed, preserving {len(original_entities)} original entities")
+            return text_content, original_entities
 
     async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
         """Copy message content to target channel with full formatting preservation"""
@@ -591,23 +608,34 @@ class TelegramEmojiBot:
                         
                         # Add caption and entities if they exist
                         if caption:
-                            send_file_kwargs['caption'] = caption
+                            logger.info(f"Original caption: '{caption}'")
+                            logger.info(f"Original caption entities: {len(message.entities or [])} entities")
                             
-                            # Preserve all caption entities exactly as they are
+                            # Log original entities for debugging
                             if message.entities:
-                                logger.info(f"Preserving {len(message.entities)} caption formatting entities for media")
-                                # Log each entity type for debugging
-                                for entity in message.entities:
+                                for i, entity in enumerate(message.entities):
                                     entity_type = type(entity).__name__
                                     if hasattr(entity, 'document_id'):
-                                        logger.info(f"  - Premium Emoji: {entity_type} at offset {entity.offset}, length {entity.length}, ID: {entity.document_id}")
+                                        logger.info(f"  Original[{i}]: {entity_type} at {entity.offset}-{entity.offset + entity.length}, ID: {entity.document_id}")
                                     else:
-                                        logger.info(f"  - Formatting: {entity_type} at offset {entity.offset}, length {entity.length}")
-                                
-                                # Use formatting_entities parameter for caption formatting
-                                send_file_kwargs['formatting_entities'] = message.entities
+                                        logger.info(f"  Original[{i}]: {entity_type} at {entity.offset}-{entity.offset + entity.length}")
                             
-                            logger.info(f"Sending media with formatted caption: '{caption[:50]}{'...' if len(caption) > 50 else ''}'")
+                            # Use the entity merging helper for proper formatting preservation in captions
+                            final_caption, final_entities = self._merge_entities_with_formatting(caption, message.entities)
+                            
+                            send_file_kwargs['caption'] = final_caption
+                            send_file_kwargs['formatting_entities'] = final_entities
+                            
+                            logger.info(f"Final caption: '{final_caption}'")
+                            logger.info(f"Final caption entities: {len(final_entities)} total entities")
+                            
+                            # Log final entity details for debugging
+                            for i, entity in enumerate(final_entities):
+                                entity_type = type(entity).__name__
+                                if hasattr(entity, 'document_id'):
+                                    logger.info(f"  Final[{i}]: {entity_type} at {entity.offset}-{entity.offset + entity.length}, ID: {entity.document_id}")
+                                else:
+                                    logger.info(f"  Final[{i}]: {entity_type} at {entity.offset}-{entity.offset + entity.length}")
                         else:
                             logger.info("Sending media without caption")
                         
@@ -618,43 +646,20 @@ class TelegramEmojiBot:
                     except Exception as primary_error:
                         logger.warning(f"Primary send_file method failed: {primary_error}")
                         
-                        # Fallback 1: Try with parse_mode='markdown' for caption formatting
+                        # Fallback 1: Try with original entities only
                         if caption:
                             try:
-                                logger.info("Fallback 1: Trying with markdown parse mode for caption")
+                                logger.info("Fallback 1: Trying with original entities only")
                                 
-                                # Check if caption contains markdown or premium emojis that need parsing
-                                needs_parsing = False
-                                if message.entities:
-                                    for entity in message.entities:
-                                        if hasattr(entity, 'document_id'):  # Premium emoji
-                                            needs_parsing = True
-                                            break
-                                
-                                # Use the new entity merging helper for proper formatting preservation
-                                try:
-                                    final_caption, final_entities = self._merge_entities_with_formatting(caption, message.entities)
-                                    await self.client.send_file(
-                                        entity=target_channel_id,
-                                        file=message.media,
-                                        caption=final_caption,
-                                        formatting_entities=final_entities,
-                                        supports_streaming=True,
-                                        force_document=False
-                                    )
-                                    logger.info("Fallback 1 successful: media sent with properly merged caption entities")
-                                except Exception as parse_error:
-                                    logger.warning(f"Failed to merge caption entities: {parse_error}")
-                                    # Final fallback with original entities
-                                    await self.client.send_file(
-                                        entity=target_channel_id,
-                                        file=message.media,
-                                        caption=caption,
-                                        formatting_entities=message.entities,
-                                        supports_streaming=True,
-                                        force_document=False
-                                    )
-                                    logger.info("Fallback 1b successful: media sent with original caption entities")
+                                await self.client.send_file(
+                                    entity=target_channel_id,
+                                    file=message.media,
+                                    caption=caption,
+                                    formatting_entities=message.entities,
+                                    supports_streaming=True,
+                                    force_document=False
+                                )
+                                logger.info("Fallback 1 successful: media sent with original caption entities")
                                 
                             except Exception as fallback1_error:
                                 logger.warning(f"Fallback 1 failed: {fallback1_error}")
@@ -771,13 +776,34 @@ class TelegramEmojiBot:
                 # Use the unified entity merging helper for consistent behavior
                 final_text, final_entities = self._merge_entities_with_formatting(text_content, message.entities)
                 
-                await self.client.send_message(
-                    entity=target_channel_id,
-                    message=final_text,
-                    formatting_entities=final_entities,
-                    link_preview=False
-                )
-                logger.info(f"Successfully sent text message with {len(final_entities)} properly merged entities")
+                try:
+                    await self.client.send_message(
+                        entity=target_channel_id,
+                        message=final_text,
+                        formatting_entities=final_entities,
+                        link_preview=False
+                    )
+                    logger.info(f"Successfully sent text message with {len(final_entities)} properly merged entities")
+                except Exception as text_error:
+                    logger.warning(f"Failed to send text with entities, trying fallback: {text_error}")
+                    # Fallback: try with original entities only
+                    try:
+                        await self.client.send_message(
+                            entity=target_channel_id,
+                            message=text_content,
+                            formatting_entities=message.entities,
+                            link_preview=False
+                        )
+                        logger.info("Successfully sent text message with original entities as fallback")
+                    except Exception as fallback_error:
+                        logger.error(f"All text sending methods failed: {fallback_error}")
+                        # Final fallback: plain text
+                        await self.client.send_message(
+                            entity=target_channel_id,
+                            message=text_content,
+                            link_preview=False
+                        )
+                        logger.info("Sent plain text as final fallback")
             else:
                 # Handle other message types like stickers, animations, etc.
                 # This case should be rare since most content is either media or text
