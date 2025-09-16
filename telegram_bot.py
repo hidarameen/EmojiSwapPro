@@ -508,6 +508,7 @@ class TelegramEmojiBot:
         Helper function to properly merge entities with markdown parsing.
         This ensures both premium emojis and formatting (bold, italic, etc.) are preserved.
         Used by both text messages and media captions for consistent behavior.
+        Handles extracted emojis that are now outside their original formatting.
         """
         # If no text content, return empty
         if not text_content:
@@ -533,8 +534,17 @@ class TelegramEmojiBot:
                 # Merge existing entities with new formatting entities
                 final_entities = []
                 
-                # Add all original entities (including custom emojis and existing formatting)
+                # First, adjust original entity positions if text has changed due to emoji extraction
+                adjusted_original_entities = []
                 for entity in original_entities:
+                    # Check if this entity is still valid in the new text
+                    if (entity.offset + entity.length <= len(parsed_text)):
+                        adjusted_original_entities.append(entity)
+                    else:
+                        logger.debug(f"Skipping invalid original entity: {type(entity).__name__} at {entity.offset}-{entity.offset + entity.length}")
+                
+                # Add adjusted original entities (including custom emojis and existing formatting)
+                for entity in adjusted_original_entities:
                     final_entities.append(entity)
                 
                 # Add new formatting entities from markdown parsing
@@ -548,14 +558,14 @@ class TelegramEmojiBot:
                             overlaps = True
                             break
                     
-                    # Only add if no overlap and it's not a duplicate type
+                    # Only add if no overlap
                     if not overlaps:
                         final_entities.append(new_entity)
                 
                 # Sort entities by offset to maintain proper order
                 final_entities.sort(key=lambda e: e.offset)
                 
-                logger.info(f"Merged entities: {len(final_entities)} total entities (from {len(original_entities)} original + {len(parsed_entities)} parsed, after overlap removal)")
+                logger.info(f"Merged entities: {len(final_entities)} total entities (from {len(adjusted_original_entities)} adjusted original + {len(parsed_entities)} parsed, after overlap removal)")
                 return parsed_text, final_entities
                 
             except Exception as parse_error:
@@ -1674,102 +1684,132 @@ class TelegramEmojiBot:
 
     def _smart_emoji_replacement(self, text: str, emoji: str, replacement: str) -> str:
         """
-        Smart emoji replacement that avoids:
-        1. Code blocks (text within backticks ``)
-        2. Nested brackets in links [text](url)
+        Smart emoji replacement that:
+        1. Extracts emojis from code blocks and links (removes formatting from emojis)
+        2. Preserves formatting for non-emoji text
+        3. Handles nested brackets in links
         """
         import re
         
-        # Find all protected regions where we should NOT replace emojis
-        protected_regions = []
-        
-        # 1. Find all code blocks (inline code within backticks)
-        code_pattern = r'`[^`]*`'
-        for match in re.finditer(code_pattern, text):
-            protected_regions.append((match.start(), match.end()))
-            logger.debug(f"Protected code block: {match.group()} at {match.start()}-{match.end()}")
-        
-        # 2. Find all existing markdown links [text](url)
-        link_pattern = r'\[([^\[\]]*)\]\([^\)]*\)'
-        
-        # For existing links, we need special handling
-        result_text = text
         escaped_emoji = re.escape(emoji)
+        result_text = text
         
-        # First, handle emojis inside existing markdown links
-        def replace_emoji_in_link(match):
-            link_text = match.group(1)  # The text part of [text](url)
-            link_url = match.group(2)   # The URL part
+        # Pattern to find code blocks (inline code within backticks)
+        code_pattern = r'`([^`]*)`'
+        
+        # Pattern to find markdown links [text](url)
+        link_pattern = r'\[([^\[\]]*)\]\(([^\)]*)\)'
+        
+        # First, handle emojis inside code blocks - extract them outside
+        def extract_emoji_from_code(match):
+            code_content = match.group(1)
+            code_start = match.start()
             
-            # Replace emoji only in the link text, not in the URL
+            if emoji in code_content:
+                logger.debug(f"Found emoji in code block: {match.group()}")
+                
+                # Extract emoji from code and place it outside
+                # Split the code content around the emoji
+                parts = code_content.split(emoji)
+                
+                if len(parts) == 2:
+                    # Simple case: emoji is at start, middle, or end
+                    before_emoji = parts[0]
+                    after_emoji = parts[1]
+                    
+                    # Build the replacement:
+                    # - Put emoji outside with its replacement
+                    # - Keep remaining text in code formatting if it's not empty
+                    result_parts = []
+                    
+                    if before_emoji:
+                        result_parts.append(f"`{before_emoji}`")
+                    
+                    result_parts.append(replacement)
+                    
+                    if after_emoji:
+                        result_parts.append(f"`{after_emoji}`")
+                    
+                    return "".join(result_parts)
+                else:
+                    # Multiple emojis in the same code block
+                    # Replace all emojis and rebuild
+                    new_code_content = code_content.replace(emoji, f"`{replacement}`")
+                    # Clean up any empty code blocks
+                    new_code_content = re.sub(r'``+', '`', new_code_content)
+                    new_code_content = re.sub(r'`(\s*)`', r'\1', new_code_content)
+                    return new_code_content
+            
+            return match.group()  # Return unchanged if no emoji
+        
+        # Apply emoji extraction from code blocks
+        result_text = re.sub(code_pattern, extract_emoji_from_code, result_text)
+        
+        # Second, handle emojis inside markdown links - extract them outside
+        def extract_emoji_from_link(match):
+            link_text = match.group(1)
+            link_url = match.group(2)
+            
             if emoji in link_text:
-                # Check if this link region overlaps with any protected region
-                link_start = match.start()
-                link_end = match.end()
+                logger.debug(f"Found emoji in link: {match.group()}")
                 
-                # Check if this link is in a protected region (like code block)
-                is_protected = any(
-                    protected_start <= link_start < protected_end or
-                    protected_start < link_end <= protected_end
-                    for protected_start, protected_end in protected_regions
-                )
+                # Extract emoji from link text and place it outside
+                parts = link_text.split(emoji)
                 
-                if is_protected:
-                    logger.debug(f"Skipping emoji replacement in protected link: {match.group()}")
-                    return match.group()  # Return unchanged
-                
-                # Replace emoji in link text
-                new_link_text = link_text.replace(emoji, replacement)
-                logger.debug(f"Replacing emoji in link text: '{link_text}' -> '{new_link_text}'")
-                return f"[{new_link_text}]({link_url})"
+                if len(parts) == 2:
+                    before_emoji = parts[0]
+                    after_emoji = parts[1]
+                    
+                    # Build the replacement:
+                    # - Put emoji outside with its replacement
+                    # - Keep remaining text in link formatting if it's not empty
+                    result_parts = []
+                    
+                    if before_emoji and after_emoji:
+                        # Emoji in the middle: [before]emoji[after](url)
+                        result_parts.append(f"[{before_emoji}]({link_url})")
+                        result_parts.append(replacement)
+                        result_parts.append(f"[{after_emoji}]({link_url})")
+                    elif before_emoji:
+                        # Emoji at the end: [before]emoji
+                        result_parts.append(f"[{before_emoji}]({link_url})")
+                        result_parts.append(replacement)
+                    elif after_emoji:
+                        # Emoji at the start: emoji[after]
+                        result_parts.append(replacement)
+                        result_parts.append(f"[{after_emoji}]({link_url})")
+                    else:
+                        # Only emoji in link: [emoji] -> emoji
+                        result_parts.append(replacement)
+                    
+                    return "".join(result_parts)
+                else:
+                    # Multiple emojis in the same link
+                    # Replace all emojis and rebuild
+                    remaining_text = link_text.replace(emoji, "")
+                    emoji_count = link_text.count(emoji)
+                    
+                    result_parts = []
+                    if remaining_text.strip():
+                        result_parts.append(f"[{remaining_text}]({link_url})")
+                    
+                    # Add all extracted emojis
+                    for _ in range(emoji_count):
+                        result_parts.append(replacement)
+                    
+                    return "".join(result_parts)
             
-            return match.group()  # Return unchanged
+            return match.group()  # Return unchanged if no emoji
         
-        # Replace emojis within existing markdown links
-        result_text = re.sub(r'\[([^\[\]]*)\]\(([^\)]*)\)', replace_emoji_in_link, result_text)
+        # Apply emoji extraction from links
+        result_text = re.sub(link_pattern, extract_emoji_from_link, result_text)
         
-        # Now handle emojis outside of links and code blocks
-        # We need to track new protected regions after link processing
-        current_protected_regions = []
+        # Finally, handle any remaining emojis in unformatted text
+        result_text = re.sub(escaped_emoji, replacement, result_text)
         
-        # Re-find code blocks in the updated text
-        for match in re.finditer(code_pattern, result_text):
-            current_protected_regions.append((match.start(), match.end()))
-            
-        # Find all link regions in the updated text
-        for match in re.finditer(r'\[[^\[\]]*\]\([^\)]*\)', result_text):
-            current_protected_regions.append((match.start(), match.end()))
-            
-        # Sort protected regions by start position
-        current_protected_regions.sort(key=lambda x: x[0])
-        
-        # Split text into segments and process only unprotected segments
-        if current_protected_regions:
-            segments = []
-            last_end = 0
-            
-            for region_start, region_end in current_protected_regions:
-                # Add unprotected segment before this region
-                if last_end < region_start:
-                    unprotected_segment = result_text[last_end:region_start]
-                    # Replace emoji in unprotected segment
-                    replaced_segment = re.sub(escaped_emoji, replacement, unprotected_segment)
-                    segments.append(replaced_segment)
-                
-                # Add the protected region unchanged
-                segments.append(result_text[region_start:region_end])
-                last_end = region_end
-            
-            # Add any remaining unprotected segment
-            if last_end < len(result_text):
-                unprotected_segment = result_text[last_end:]
-                replaced_segment = re.sub(escaped_emoji, replacement, unprotected_segment)
-                segments.append(replaced_segment)
-            
-            result_text = ''.join(segments)
-        else:
-            # No protected regions, safe to replace everywhere
-            result_text = re.sub(escaped_emoji, replacement, result_text)
+        # Clean up any double spaces or formatting artifacts
+        result_text = re.sub(r'\s+', ' ', result_text)
+        result_text = result_text.strip()
         
         return result_text
 
