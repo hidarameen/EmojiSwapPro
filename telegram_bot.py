@@ -1685,10 +1685,9 @@ class TelegramEmojiBot:
     def _smart_emoji_replacement(self, text: str, emoji: str, replacement: str) -> str:
         """
         Smart emoji replacement that:
-        1. Removes formatting from code blocks and hidden links ONLY when they contain emojis
-        2. Converts formatted text containing emojis to plain text
-        3. Preserves other formatting types (bold, italic, etc.)
-        4. Replaces emojis with premium versions
+        1. Handles emojis inside code blocks and hidden links by converting ONLY the formatting to plain text
+        2. Preserves other formatting types (bold, italic, etc.)  
+        3. Replaces emojis with premium versions
         """
         import re
         
@@ -1698,40 +1697,38 @@ class TelegramEmojiBot:
         # Pattern to find code blocks (inline code within backticks)
         code_pattern = r'`([^`]*)`'
         
-        # Pattern to find markdown links [text](url) - more robust pattern
+        # Pattern to find markdown links [text](url)
         link_pattern = r'\[([^\[\]]*)\]\(([^\)]*)\)'
         
-        # First, handle emojis inside code blocks - convert to plain text
+        # First, handle emojis inside code blocks - convert to plain text ONLY if emoji exists
         def convert_code_with_emoji_to_plain(match):
             code_content = match.group(1)
             
             if emoji in code_content:
-                logger.debug(f"Found emoji in code block, converting to plain text: {match.group()}")
-                
-                # Convert code block containing emoji to plain text and replace emoji
+                logger.debug(f"Found emoji {emoji} in code block, converting to plain text with replacement")
+                # Remove code formatting and replace emoji
                 plain_text = code_content.replace(emoji, replacement)
                 return plain_text
             
             # No emoji found, keep original formatting
-            return match.group()
+            return match.group(0)
         
         # Apply code block conversion
         result_text = re.sub(code_pattern, convert_code_with_emoji_to_plain, result_text)
         
-        # Second, handle emojis inside markdown links - convert to plain text
+        # Second, handle emojis inside markdown links - convert to plain text ONLY if emoji exists  
         def convert_link_with_emoji_to_plain(match):
             link_text = match.group(1)
             link_url = match.group(2)
             
             if emoji in link_text:
-                logger.debug(f"Found emoji in hidden link, converting to plain text: {match.group()}")
-                
-                # Convert link containing emoji to plain text and replace emoji
+                logger.debug(f"Found emoji {emoji} in hidden link text, converting to plain text with replacement")
+                # Remove link formatting and replace emoji - keep only the text part
                 plain_text = link_text.replace(emoji, replacement)
                 return plain_text
             
             # No emoji found, keep original formatting
-            return match.group()
+            return match.group(0)
         
         # Apply link conversion
         result_text = re.sub(link_pattern, convert_link_with_emoji_to_plain, result_text)
@@ -1739,8 +1736,8 @@ class TelegramEmojiBot:
         # Finally, handle any remaining emojis in unformatted text
         result_text = re.sub(escaped_emoji, replacement, result_text)
         
-        # Clean up any double spaces
-        result_text = re.sub(r'\s+', ' ', result_text)
+        # Clean up any excessive spaces but preserve single spaces
+        result_text = re.sub(r' {2,}', ' ', result_text)
         result_text = result_text.strip()
         
         return result_text
@@ -1751,7 +1748,16 @@ class TelegramEmojiBot:
             message = event.message
             original_text = message.text or message.message
             
-            logger.info(f"Attempting to replace emojis in message: '{original_text}'")
+            # إضافة cache للرسائل المعالجة لتجنب التكرار
+            if not hasattr(self, '_processed_messages'):
+                self._processed_messages = set()
+            
+            message_key = f"{message.chat_id}_{message.id}"
+            if message_key in self._processed_messages:
+                logger.debug(f"Message {message.id} already processed, skipping")
+                return
+            
+            logger.info(f"Attempting to replace emojis in message {message.id}: '{original_text}'")
             
             if not original_text:
                 logger.info("No text in message, skipping emoji replacement")
@@ -1763,6 +1769,15 @@ class TelegramEmojiBot:
                 (message.entities and any(hasattr(entity, 'document_id') for entity in message.entities))):
                 logger.info("Message already contains premium emojis or custom emoji entities, skipping replacement")
                 return
+            
+            # إضافة الرسالة إلى قائمة المعالجة
+            self._processed_messages.add(message_key)
+            
+            # تنظيف الـ cache كل فترة لتجنب تراكم الذاكرة
+            if len(self._processed_messages) > 1000:
+                # احتفظ بآخر 500 رسالة فقط
+                recent_messages = list(self._processed_messages)[-500:]
+                self._processed_messages = set(recent_messages)
             
             # Extract emojis from the message
             found_emojis = self.extract_emojis_from_text(original_text)
@@ -4956,7 +4971,6 @@ class TelegramEmojiBot:
                 
                 # Handle private messages with commands FIRST
                 if event.is_private:
-                    # Let handle_private_message do its own validation and authorization
                     await self.handle_private_message(event)
                     return
                 
@@ -4973,8 +4987,25 @@ class TelegramEmojiBot:
                 try:
                     event_peer_id = utils.get_peer_id(event.chat)
                     if event_peer_id and event_peer_id in self.monitored_channels:
+                        # إضافة cache للرسائل المعالجة في النسخ لتجنب التكرار
+                        if not hasattr(self, '_processed_forwarding'):
+                            self._processed_forwarding = set()
+                        
+                        forwarding_key = f"{event_peer_id}_{event.message.id}"
+                        if forwarding_key in self._processed_forwarding:
+                            logger.debug(f"Message {event.message.id} in channel {event_peer_id} already processed for forwarding, skipping")
+                            return
+                        
                         message_text = event.message.text or event.message.message or ""
-                        logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
+                        logger.info(f"Processing new message in monitored channel {event_peer_id}: {message_text}")
+                        
+                        # إضافة الرسالة إلى قائمة المعالجة
+                        self._processed_forwarding.add(forwarding_key)
+                        
+                        # تنظيف الـ cache كل فترة
+                        if len(self._processed_forwarding) > 1000:
+                            recent_forwarding = list(self._processed_forwarding)[-500:]
+                            self._processed_forwarding = set(recent_forwarding)
                         
                         # Handle emoji replacement first (only for original messages in source channels)
                         await self.replace_emojis_in_message(event)
@@ -5005,7 +5036,7 @@ class TelegramEmojiBot:
                                 if attempt < 2:  # Don't sleep on the last attempt
                                     await asyncio.sleep(0.5)  # Wait before retry
                             else:
-                                logger.warning(f"Could not get updated message with premium emojis after 3 attempts")
+                                logger.debug(f"Using original message for forwarding (no premium emojis found after replacement)")
                         except Exception as e:
                             logger.warning(f"Could not fetch updated message, using original: {e}")
                             updated_message = event.message
