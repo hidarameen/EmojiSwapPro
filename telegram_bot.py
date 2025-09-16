@@ -1688,6 +1688,7 @@ class TelegramEmojiBot:
         1. Extracts emojis from code blocks and links (removes formatting from emojis)
         2. Preserves formatting for non-emoji text
         3. Handles nested brackets in links
+        4. Ensures the replacement emoji is placed WITHOUT any formatting
         """
         import re
         
@@ -1703,28 +1704,23 @@ class TelegramEmojiBot:
         # First, handle emojis inside code blocks - extract them outside
         def extract_emoji_from_code(match):
             code_content = match.group(1)
-            code_start = match.start()
             
             if emoji in code_content:
                 logger.debug(f"Found emoji in code block: {match.group()}")
                 
-                # Extract emoji from code and place it outside
-                # Split the code content around the emoji
+                # Extract emoji from code and place it outside WITHOUT formatting
                 parts = code_content.split(emoji)
                 
                 if len(parts) == 2:
-                    # Simple case: emoji is at start, middle, or end
                     before_emoji = parts[0]
                     after_emoji = parts[1]
                     
-                    # Build the replacement:
-                    # - Put emoji outside with its replacement
-                    # - Keep remaining text in code formatting if it's not empty
                     result_parts = []
                     
                     if before_emoji:
                         result_parts.append(f"`{before_emoji}`")
                     
+                    # Add emoji replacement WITHOUT markdown formatting
                     result_parts.append(replacement)
                     
                     if after_emoji:
@@ -1732,15 +1728,25 @@ class TelegramEmojiBot:
                     
                     return "".join(result_parts)
                 else:
-                    # Multiple emojis in the same code block
-                    # Replace all emojis and rebuild
-                    new_code_content = code_content.replace(emoji, f"`{replacement}`")
-                    # Clean up any empty code blocks
-                    new_code_content = re.sub(r'``+', '`', new_code_content)
-                    new_code_content = re.sub(r'`(\s*)`', r'\1', new_code_content)
-                    return new_code_content
+                    # Multiple emojis - extract each one
+                    new_content = code_content
+                    extracted_emojis = []
+                    
+                    # Count and remove all emojis
+                    emoji_count = new_content.count(emoji)
+                    new_content = new_content.replace(emoji, "")
+                    
+                    result_parts = []
+                    if new_content.strip():
+                        result_parts.append(f"`{new_content}`")
+                    
+                    # Add extracted emojis WITHOUT formatting
+                    for _ in range(emoji_count):
+                        result_parts.append(replacement)
+                    
+                    return "".join(result_parts)
             
-            return match.group()  # Return unchanged if no emoji
+            return match.group()
         
         # Apply emoji extraction from code blocks
         result_text = re.sub(code_pattern, extract_emoji_from_code, result_text)
@@ -1754,52 +1760,41 @@ class TelegramEmojiBot:
                 logger.debug(f"Found emoji in link: {match.group()}")
                 
                 # Extract emoji from link text and place it outside
-                parts = link_text.split(emoji)
+                parts = link_text.split(emoji, 1)  # Split only on first occurrence
                 
                 if len(parts) == 2:
                     before_emoji = parts[0]
                     after_emoji = parts[1]
                     
-                    # Build the replacement:
-                    # - Put emoji outside with its replacement
-                    # - Keep remaining text in link formatting if it's not empty
                     result_parts = []
                     
-                    if before_emoji and after_emoji:
-                        # Emoji in the middle: [before]emoji[after](url)
-                        result_parts.append(f"[{before_emoji}]({link_url})")
-                        result_parts.append(replacement)
-                        result_parts.append(f"[{after_emoji}]({link_url})")
-                    elif before_emoji:
-                        # Emoji at the end: [before]emoji
-                        result_parts.append(f"[{before_emoji}]({link_url})")
-                        result_parts.append(replacement)
-                    elif after_emoji:
-                        # Emoji at the start: emoji[after]
-                        result_parts.append(replacement)
-                        result_parts.append(f"[{after_emoji}]({link_url})")
-                    else:
-                        # Only emoji in link: [emoji] -> emoji
-                        result_parts.append(replacement)
+                    # Add replacement emoji first (extracted from formatting)
+                    result_parts.append(replacement)
+                    
+                    # Then add the remaining text with proper link formatting
+                    remaining_text = (before_emoji + after_emoji).strip()
+                    if remaining_text:
+                        result_parts.append(f"[{remaining_text}]({link_url})")
                     
                     return "".join(result_parts)
                 else:
-                    # Multiple emojis in the same link
-                    # Replace all emojis and rebuild
-                    remaining_text = link_text.replace(emoji, "")
+                    # Fallback: extract all emojis and keep remaining text
+                    remaining_text = link_text.replace(emoji, "").strip()
                     emoji_count = link_text.count(emoji)
                     
                     result_parts = []
-                    if remaining_text.strip():
-                        result_parts.append(f"[{remaining_text}]({link_url})")
                     
-                    # Add all extracted emojis
+                    # Add extracted emojis first
                     for _ in range(emoji_count):
                         result_parts.append(replacement)
                     
+                    # Then add remaining text if any
+                    if remaining_text:
+                        result_parts.append(f"[{remaining_text}]({link_url})")
+                    
                     return "".join(result_parts)
             
-            return match.group()  # Return unchanged if no emoji
+            return match.group()
         
         # Apply emoji extraction from links
         result_text = re.sub(link_pattern, extract_emoji_from_link, result_text)
@@ -1879,15 +1874,15 @@ class TelegramEmojiBot:
             
             # Use smart replacement to avoid conflicts with code blocks and links
             for normal_emoji, premium_emoji_id in emojis_to_replace.items():
-                # Escape special regex characters in emoji
-                escaped_emoji = re.escape(normal_emoji)
-                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_emoji_id})"
-                
                 # Count occurrences before replacement
+                escaped_emoji = re.escape(normal_emoji)
                 occurrence_count = len(re.findall(escaped_emoji, modified_text))
                 logger.info(f"Replacing {occurrence_count} occurrences of {normal_emoji} with premium emoji ID {premium_emoji_id}")
                 
-                # Smart replacement that avoids code blocks and handles links properly
+                # Create premium emoji markdown - this will be the final replacement
+                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_emoji_id})"
+                
+                # Smart replacement that extracts emojis from formatting and replaces with premium version
                 modified_text = self._smart_emoji_replacement(modified_text, normal_emoji, premium_emoji_markdown)
                 logger.info(f"Text after replacing {normal_emoji}: '{modified_text}'")
             
