@@ -1717,32 +1717,32 @@ class TelegramEmojiBot:
                     
                     result_parts = []
                     
-                    if before_emoji:
-                        result_parts.append(f"`{before_emoji}`")
-                    
-                    # Add emoji replacement WITHOUT markdown formatting
+                    # Add emoji replacement WITHOUT markdown formatting first
                     result_parts.append(replacement)
                     
-                    if after_emoji:
-                        result_parts.append(f"`{after_emoji}`")
+                    # Then add remaining code content if any
+                    remaining_code = (before_emoji + after_emoji).strip()
+                    if remaining_code:
+                        result_parts.append(f"`{remaining_code}`")
                     
                     return "".join(result_parts)
                 else:
                     # Multiple emojis - extract each one
                     new_content = code_content
-                    extracted_emojis = []
                     
                     # Count and remove all emojis
                     emoji_count = new_content.count(emoji)
                     new_content = new_content.replace(emoji, "")
                     
                     result_parts = []
-                    if new_content.strip():
-                        result_parts.append(f"`{new_content}`")
                     
-                    # Add extracted emojis WITHOUT formatting
+                    # Add extracted emojis WITHOUT formatting first
                     for _ in range(emoji_count):
                         result_parts.append(replacement)
+                    
+                    # Then add remaining code if any
+                    if new_content.strip():
+                        result_parts.append(f"`{new_content}`")
                     
                     return "".join(result_parts)
             
@@ -1759,40 +1759,23 @@ class TelegramEmojiBot:
             if emoji in link_text:
                 logger.debug(f"Found emoji in link: {match.group()}")
                 
-                # Extract emoji from link text and place it outside
-                parts = link_text.split(emoji, 1)  # Split only on first occurrence
+                # Count emojis for proper replacement
+                emoji_count = link_text.count(emoji)
                 
-                if len(parts) == 2:
-                    before_emoji = parts[0]
-                    after_emoji = parts[1]
-                    
-                    result_parts = []
-                    
-                    # Add replacement emoji first (extracted from formatting)
+                # Remove all emojis from link text
+                remaining_text = link_text.replace(emoji, "").strip()
+                
+                result_parts = []
+                
+                # Add extracted emojis first (outside of any formatting)
+                for _ in range(emoji_count):
                     result_parts.append(replacement)
-                    
-                    # Then add the remaining text with proper link formatting
-                    remaining_text = (before_emoji + after_emoji).strip()
-                    if remaining_text:
-                        result_parts.append(f"[{remaining_text}]({link_url})")
-                    
-                    return "".join(result_parts)
-                else:
-                    # Fallback: extract all emojis and keep remaining text
-                    remaining_text = link_text.replace(emoji, "").strip()
-                    emoji_count = link_text.count(emoji)
-                    
-                    result_parts = []
-                    
-                    # Add extracted emojis first
-                    for _ in range(emoji_count):
-                        result_parts.append(replacement)
-                    
-                    # Then add remaining text if any
-                    if remaining_text:
-                        result_parts.append(f"[{remaining_text}]({link_url})")
-                    
-                    return "".join(result_parts)
+                
+                # Then add the remaining text with proper link formatting if any text remains
+                if remaining_text:
+                    result_parts.append(f"[{remaining_text}]({link_url})")
+                
+                return "".join(result_parts)
             
             return match.group()
         
