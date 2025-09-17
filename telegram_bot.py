@@ -1779,7 +1779,9 @@ class TelegramEmojiBot:
             # But only if we know we processed an emoji in formatting
             if emoji_processed_in_formatting:
                 logger.info("Forcing text change to ensure successful edit")
-                # The replacement already contains the markdown format, so we're good
+                # Add zero-width space to ensure text is different
+                text = text + "\u200B"
+                logger.info(f"Added zero-width space, new text: '{text}'")
         
         if emoji_processed_in_formatting:
             logger.info(f"✅ SUCCESSFULLY removed code formatting and replaced emoji: '{emoji}' -> '{replacement}'")
