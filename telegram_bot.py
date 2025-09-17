@@ -582,10 +582,73 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to perform delayed copy from {source_channel_id} to {target_channel_id}: {e}")
 
+    def _clean_text_for_entities(self, text_content: str, message_entities: list) -> str:
+        """
+        Clean text from markdown symbols when entities are present to prevent double formatting.
+        This fixes the issue where **text** appears with bold entities, causing ****text**** display.
+        """
+        if not text_content or not message_entities:
+            return text_content
+        
+        # Clean text by removing markdown symbols that have corresponding entities
+        cleaned_text = text_content
+        
+        # Create a list to track processed character positions
+        entities_by_type = {}
+        for entity in message_entities:
+            entity_type = type(entity).__name__
+            if entity_type not in entities_by_type:
+                entities_by_type[entity_type] = []
+            entities_by_type[entity_type].append(entity)
+        
+        # Remove ** for MessageEntityBold
+        if 'MessageEntityBold' in entities_by_type:
+            logger.info("Found bold entities, removing ** symbols")
+            import re
+            original_cleaned = cleaned_text
+            
+            # Strategy: Remove all ** sequences completely since we have entities
+            # This handles cases like ****text****, **text1****text2**, etc.
+            bold_entities = entities_by_type['MessageEntityBold']
+            logger.info(f"Processing {len(bold_entities)} bold entities")
+            
+            # Remove all ** sequences (2 or more asterisks together)
+            # This is safe because we have entities that will provide the formatting
+            cleaned_text = re.sub(r'\*{2,}', '', cleaned_text)
+            
+            if cleaned_text != original_cleaned:
+                logger.info(f"Removed all ** sequences: '{original_cleaned}' -> '{cleaned_text}'")
+            
+        # Remove __ for MessageEntityItalic  
+        if 'MessageEntityItalic' in entities_by_type:
+            logger.info("Found italic entities, removing __ symbols")
+            if cleaned_text.startswith('__') and cleaned_text.endswith('__'):
+                cleaned_text = cleaned_text[2:-2]
+                logger.info(f"Removed __ symbols: '{text_content}' -> '{cleaned_text}'")
+        
+        # Remove ~~ for MessageEntityStrikethrough
+        if 'MessageEntityStrikethrough' in entities_by_type:
+            logger.info("Found strikethrough entities, removing ~~ symbols")
+            if cleaned_text.startswith('~~') and cleaned_text.endswith('~~'):
+                cleaned_text = cleaned_text[2:-2]
+                logger.info(f"Removed ~~ symbols: '{text_content}' -> '{cleaned_text}'")
+        
+        # Remove ` for MessageEntityCode (single backticks)
+        if 'MessageEntityCode' in entities_by_type:
+            logger.info("Found code entities, removing ` symbols")
+            if cleaned_text.startswith('`') and cleaned_text.endswith('`'):
+                cleaned_text = cleaned_text[1:-1]
+                logger.info(f"Removed ` symbols: '{text_content}' -> '{cleaned_text}'")
+        
+        if cleaned_text != text_content:
+            logger.info(f"Text cleaned from markdown symbols: '{text_content}' -> '{cleaned_text}'")
+        
+        return cleaned_text
+
     def _merge_entities_with_formatting(self, text_content: str, message_entities: list) -> Tuple[str, list]:
         """
-        Helper function to properly merge entities with markdown parsing.
-        This ensures both premium emojis and formatting (bold, italic, etc.) are preserved.
+        Helper function to preserve entities and formatting without conflicts.
+        CRITICAL: Never mix markdown parsing with existing entities to prevent formatting corruption.
         Used by both text messages and media captions for consistent behavior.
         PRESERVES ALL original text structure including line breaks and spacing.
         """
@@ -593,132 +656,36 @@ class TelegramEmojiBot:
         if not text_content:
             return text_content, message_entities or []
         
-        # Store original text for comparison
-        original_text_content = text_content
-        
-        # Check if the text contains markdown-style formatting (like **text**)
-        # that needs to be converted to proper Telegram entities
-        needs_markdown_parse = False
-        if ('**' in text_content or '__' in text_content or 
-            '~~' in text_content or '`' in text_content or
-            '[' in text_content and '](' in text_content):
-            needs_markdown_parse = True
-        
         # Always preserve original entities, especially custom emojis
         original_entities = message_entities or []
         
-        # If we have entities and need markdown parsing, merge them properly
-        if original_entities and needs_markdown_parse:
-            try:
-                # Parse the text with markdown to get proper formatting entities
-                parsed_text, parsed_entities = self.parse_mode.parse(text_content)
-                
-                # CRITICAL: Check if parsing modified the text structure
-                if parsed_text != text_content:
-                    logger.warning(f"Markdown parsing changed text structure - preserving original structure")
-                    logger.info(f"Original: '{text_content[:100]}{'...' if len(text_content) > 100 else ''}'")
-                    logger.info(f"Parsed: '{parsed_text[:100]}{'...' if len(parsed_text) > 100 else ''}'")
-                    
-                    # If the structure changed significantly, use original text but try to preserve entities
-                    # This prevents loss of line breaks and spacing
-                    if len(parsed_text) != len(text_content):
-                        logger.info("Text length changed during parsing - using original text with adjusted entities")
-                        parsed_text = text_content  # Use original text structure
-                        # Keep only original entities since new positions may be invalid
-                        final_entities = original_entities[:]
-                    else:
-                        # Length same but content different - safe to proceed with merging
-                        final_entities = []
-                        
-                        # Validate and adjust original entity positions for the parsed text
-                        adjusted_original_entities = []
-                        for entity in original_entities:
-                            # Check if this entity is still valid in the new text
-                            if (entity.offset + entity.length <= len(parsed_text)):
-                                # For custom emojis, always preserve them
-                                if isinstance(entity, MessageEntityCustomEmoji):
-                                    adjusted_original_entities.append(entity)
-                                else:
-                                    # For other entities, verify they're still valid
-                                    try:
-                                        if entity.offset + entity.length <= len(text_content) and entity.offset + entity.length <= len(parsed_text):
-                                            adjusted_original_entities.append(entity)
-                                        else:
-                                            logger.debug(f"Entity out of bounds, skipping: {type(entity).__name__}")
-                                    except IndexError:
-                                        logger.debug(f"Entity validation failed, skipping: {type(entity).__name__}")
-                            else:
-                                logger.debug(f"Entity beyond text bounds: {type(entity).__name__}")
-                        
-                        # Add validated original entities
-                        final_entities.extend(adjusted_original_entities)
-                        
-                        # Add new formatting entities from markdown parsing
-                        for new_entity in parsed_entities:
-                            # Skip if this is a custom emoji entity (we already have those from original)
-                            if isinstance(new_entity, MessageEntityCustomEmoji):
-                                continue
-                            
-                            # Check for overlaps with existing entities
-                            overlaps = False
-                            for existing_entity in final_entities:
-                                # Allow custom emojis to coexist with other formatting
-                                if isinstance(existing_entity, MessageEntityCustomEmoji):
-                                    continue
-                                
-                                # Check for actual overlap in position
-                                if (new_entity.offset < existing_entity.offset + existing_entity.length and
-                                    new_entity.offset + new_entity.length > existing_entity.offset):
-                                    overlaps = True
-                                    break
-                            
-                            # Only add if no overlap
-                            if not overlaps:
-                                final_entities.append(new_entity)
-                else:
-                    # Text structure preserved during parsing - safe to proceed
-                    final_entities = []
-                    
-                    # Add original entities
-                    for entity in original_entities:
-                        final_entities.append(entity)
-                    
-                    # Add new formatting entities
-                    for new_entity in parsed_entities:
-                        if isinstance(new_entity, MessageEntityCustomEmoji):
-                            continue  # Skip duplicates
-                        
-                        overlaps = False
-                        for existing_entity in final_entities:
-                            if isinstance(existing_entity, MessageEntityCustomEmoji):
-                                continue
-                            
-                            if (new_entity.offset < existing_entity.offset + existing_entity.length and
-                                new_entity.offset + new_entity.length > existing_entity.offset):
-                                overlaps = True
-                                break
-                        
-                        if not overlaps:
-                            final_entities.append(new_entity)
-                
-                # Sort entities by offset to maintain proper order
-                final_entities.sort(key=lambda e: e.offset)
-                
-                logger.info(f"Successfully merged entities while preserving text structure: {len(final_entities)} total entities")
-                return parsed_text, final_entities
-                
-            except Exception as parse_error:
-                logger.warning(f"Failed to parse markdown for entity merging, using original entities: {parse_error}")
-                # Fallback to original entities - preserve structure completely
-                return text_content, original_entities
-        elif needs_markdown_parse and not original_entities:
-            # No existing entities, but text has markdown - parse it carefully
+        # GUARD: If original message_entities exist (formatting already defined), 
+        # return immediately without markdown parsing to prevent conflicts
+        if original_entities:
+            logger.info(f"Preserving {len(original_entities)} original entities without markdown parsing")
+            return text_content, original_entities
+        
+        # Check if the text contains markdown-style formatting (like **text**)
+        # Only for messages that have NO existing entities
+        needs_markdown_parse = False
+        if ('**' in text_content or '__' in text_content or 
+            '~~' in text_content or '`' in text_content):
+            needs_markdown_parse = True
+        
+        # Skip markdown links like [emoji](emoji/123) as they indicate premium emoji replacement
+        # These should NOT be parsed as markdown links
+        if '[' in text_content and '](' in text_content and 'emoji/' in text_content:
+            logger.info("Text contains premium emoji markdown links - skipping markdown parsing")
+            return text_content, []
+        
+        # Only parse markdown for messages without any existing entities
+        if needs_markdown_parse:
             try:
                 parsed_text, parsed_entities = self.parse_mode.parse(text_content)
                 
                 # Check if parsing preserved the structure
                 if parsed_text != text_content:
-                    logger.warning(f"Markdown parsing changed text structure for text without entities - preserving original")
+                    logger.warning(f"Markdown parsing changed text structure - preserving original")
                     return text_content, []
                 
                 logger.info(f"Parsed markdown for text without existing entities: {len(parsed_entities)} entities found")
@@ -727,9 +694,9 @@ class TelegramEmojiBot:
                 logger.warning(f"Failed to parse markdown, using original text: {parse_error}")
                 return text_content, []
         else:
-            # No markdown parsing needed, use entities as-is and preserve text exactly
-            logger.info(f"No markdown parsing needed, preserving {len(original_entities)} original entities and original text structure")
-            return text_content, original_entities
+            # No markdown parsing needed, preserve text exactly as-is
+            logger.info(f"No markdown parsing needed, preserving original text structure")
+            return text_content, []
 
     async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
         """Copy message content to target channel with full formatting preservation after emoji replacement"""
@@ -834,22 +801,23 @@ class TelegramEmojiBot:
                                             await asyncio.sleep(0.5)  # Small delay
                                             logger.info("Sending formatted caption as separate message using entity merging")
                                             
-                                            # Use the entity merging helper for proper formatting preservation
-                                            final_caption, final_entities = self._merge_entities_with_formatting(caption, message.entities)
+                                            # Send caption with original entities - no additional processing needed
                                             await self.client.send_message(
                                                 entity=target_channel_id,
-                                                message=final_caption,
-                                                formatting_entities=final_entities,
+                                                message=caption,
+                                                formatting_entities=message.entities,
+                                                parse_mode=None,  # CRITICAL: Prevent markdown conflicts
                                                 link_preview=False
                                             )
-                                            logger.info(f"Formatted caption sent as separate message with {len(final_entities)} properly merged entities")
+                                            logger.info(f"Caption sent as separate message with {len(message.entities or [])} original entities")
                                         except Exception as caption_error:
                                             logger.error(f"Failed to send formatted caption as separate message: {caption_error}")
                                             # Final fallback: send plain caption
                                             try:
                                                 await self.client.send_message(
                                                     entity=target_channel_id,
-                                                    message=caption
+                                                    message=caption,
+                                                    parse_mode=None
                                                 )
                                                 logger.info("Plain caption sent as fallback")
                                             except Exception as plain_error:
@@ -866,7 +834,8 @@ class TelegramEmojiBot:
                                     entity=target_channel_id,
                                     file=message.media,
                                     supports_streaming=True,
-                                    force_document=False
+                                    force_document=False,
+                                    parse_mode=None
                                 )
                                 logger.info("Media sent successfully without caption")
                             except Exception as no_caption_error:
@@ -922,11 +891,13 @@ class TelegramEmojiBot:
                         if isinstance(entity, MessageEntityCustomEmoji):
                             logger.info(f"  - Premium Emoji ID {entity.document_id} at position {entity.offset}-{entity.offset + entity.length}")
                 
-                # استخدام الرسالة مباشرة بعد الاستبدال بدون معالجة إضافية
+                # CRITICAL: Clean text from markdown symbols when entities are present
+                cleaned_text = self._clean_text_for_entities(text_content, message.entities)
+                
                 try:
                     await self.client.send_message(
                         entity=target_channel_id,
-                        message=text_content,
+                        message=cleaned_text,
                         formatting_entities=message.entities,
                         link_preview=False,
                         parse_mode=None  # استخدام الكيانات مباشرة
@@ -947,6 +918,7 @@ class TelegramEmojiBot:
                                 entity=target_channel_id,
                                 message=text_content,
                                 formatting_entities=message.entities,
+                                parse_mode=None,  # CRITICAL: Prevent conflicts
                                 link_preview=False
                             )
                             logger.info(f"Successfully sent with all entities including {len(premium_emojis)} premium emojis")
@@ -956,6 +928,7 @@ class TelegramEmojiBot:
                                 entity=target_channel_id,
                                 message=text_content,
                                 formatting_entities=other_entities,
+                                parse_mode=None,  # CRITICAL: Prevent conflicts
                                 link_preview=False
                             )
                             logger.info(f"Successfully sent with {len(other_entities)} non-premium entities")
@@ -966,6 +939,7 @@ class TelegramEmojiBot:
                         await self.client.send_message(
                             entity=target_channel_id,
                             message=text_content,
+                            parse_mode=None,
                             link_preview=False
                         )
                         logger.info("Sent plain text as final fallback")
