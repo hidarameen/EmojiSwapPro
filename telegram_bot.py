@@ -613,11 +613,14 @@ class TelegramEmojiBot:
             logger.info(f"Processing {len(bold_entities)} bold entities")
             
             # Remove all ** sequences (2 or more asterisks together)
-            # This is safe because we have entities that will provide the formatting
+            # This handles **, ***, ****, etc. - aggressive cleanup for accumulated symbols
             cleaned_text = re.sub(r'\*{2,}', '', cleaned_text)
             
+            # Additional cleanup: remove any remaining single asterisks that are leftover formatting
+            cleaned_text = re.sub(r'(?<!\w)\*(?!\w)|(?<!\w)\*(?=\s)|(?<=\s)\*(?!\w)', '', cleaned_text)
+            
             if cleaned_text != original_cleaned:
-                logger.info(f"Removed all ** sequences: '{original_cleaned}' -> '{cleaned_text}'")
+                logger.info(f"Removed all ** sequences and cleanup: '{original_cleaned}' -> '{cleaned_text}'")
             
         # Remove __ for MessageEntityItalic  
         if 'MessageEntityItalic' in entities_by_type:
@@ -628,11 +631,14 @@ class TelegramEmojiBot:
             italic_entities = entities_by_type['MessageEntityItalic']
             logger.info(f"Processing {len(italic_entities)} italic entities")
             
-            # Remove all __ sequences (2 or more underscores together)
+            # Remove all __ sequences (2 or more underscores together) - handles __, ___, ____, etc.
             cleaned_text = re.sub(r'_{2,}', '', cleaned_text)
             
+            # Additional cleanup: remove any remaining single underscores that are leftover formatting
+            cleaned_text = re.sub(r'(?<!\w)_(?!\w)|(?<!\w)_(?=\s)|(?<=\s)_(?!\w)', '', cleaned_text)
+            
             if cleaned_text != original_cleaned:
-                logger.info(f"Removed all __ sequences: '{original_cleaned}' -> '{cleaned_text}'")
+                logger.info(f"Removed all __ sequences and cleanup: '{original_cleaned}' -> '{cleaned_text}'")
         
         # Remove ~~ for MessageEntityStrikethrough
         if 'MessageEntityStrikethrough' in entities_by_type:
@@ -643,11 +649,17 @@ class TelegramEmojiBot:
             strikethrough_entities = entities_by_type['MessageEntityStrikethrough']
             logger.info(f"Processing {len(strikethrough_entities)} strikethrough entities")
             
-            # Remove all ~~ sequences (2 or more tildes together)
+            # Remove all sequences of tildes (2 or more) - this handles ~~, ~~~, ~~~~, etc.
+            # Use a more aggressive approach to clean up accumulated tildes
             cleaned_text = re.sub(r'~{2,}', '', cleaned_text)
             
+            # Additional cleanup: remove any remaining single tildes that might be left over
+            # But be careful not to remove tildes that are not part of formatting
+            # Look for patterns like single ~ at start/end of words which could be leftover formatting
+            cleaned_text = re.sub(r'(?<!\w)~(?!\w)|(?<!\w)~(?=\s)|(?<=\s)~(?!\w)', '', cleaned_text)
+            
             if cleaned_text != original_cleaned:
-                logger.info(f"Removed all ~~ sequences: '{original_cleaned}' -> '{cleaned_text}'")
+                logger.info(f"Removed all ~~ sequences and cleanup: '{original_cleaned}' -> '{cleaned_text}'")
         
         # Remove ` for MessageEntityCode (single backticks)
         if 'MessageEntityCode' in entities_by_type:
@@ -719,9 +731,59 @@ class TelegramEmojiBot:
             if cleaned_text != original_cleaned:
                 logger.info(f"Removed > sequences: '{original_cleaned}' -> '{cleaned_text}'")
         
+        # Remove [text](url) for MessageEntityTextUrl (hidden links)
+        if 'MessageEntityTextUrl' in entities_by_type:
+            logger.info("Found text URL entities, removing [text](url) markdown format")
+            import re
+            original_cleaned = cleaned_text
+            
+            url_entities = entities_by_type['MessageEntityTextUrl']
+            logger.info(f"Processing {len(url_entities)} text URL entities")
+            
+            # Find and remove markdown link format [text](url)
+            # This pattern matches [any text](any url)
+            link_pattern = r'\[([^\]]*)\]\(([^)]*)\)'
+            matches = list(re.finditer(link_pattern, cleaned_text))
+            
+            if matches:
+                # Process matches in reverse order to maintain positions
+                for match in reversed(matches):
+                    link_text = match.group(1)  # text inside []
+                    link_url = match.group(2)   # url inside ()
+                    
+                    # Replace the full markdown link with just the text
+                    # The entity will handle the URL functionality
+                    cleaned_text = cleaned_text[:match.start()] + link_text + cleaned_text[match.end():]
+                    logger.info(f"Removed markdown link format: '[{link_text}]({link_url})' -> '{link_text}'")
+                    
+            if cleaned_text != original_cleaned:
+                logger.info(f"Removed [text](url) sequences: '{original_cleaned}' -> '{cleaned_text}'")
+        
+        # Final comprehensive cleanup: Remove any remaining accumulated markdown symbols
+        # This catches symbols that might not have been caught by entity-specific cleaning
+        import re
+        pre_final_cleanup = cleaned_text
+        logger.info(f"Starting final comprehensive cleanup for: '{pre_final_cleanup}'")
+        
+        # Aggressive cleanup for any remaining accumulated symbols
+        # Remove sequences of 3+ symbols that are commonly accumulated
+        cleaned_text = re.sub(r'\*{3,}', '', cleaned_text)  # Remove ***+
+        cleaned_text = re.sub(r'_{3,}', '', cleaned_text)   # Remove ___+
+        cleaned_text = re.sub(r'~{3,}', '', cleaned_text)   # Remove ~~~+
+        cleaned_text = re.sub(r'\|{3,}', '', cleaned_text)  # Remove |||+
+        
+        # Also clean up double symbols that might have been missed
+        cleaned_text = re.sub(r'\*{2}', '', cleaned_text)   # Remove **
+        cleaned_text = re.sub(r'_{2}', '', cleaned_text)    # Remove __
+        cleaned_text = re.sub(r'~{2}', '', cleaned_text)    # Remove ~~
+        cleaned_text = re.sub(r'\|{2}', '', cleaned_text)   # Remove ||
+        
+        logger.info(f"After comprehensive cleanup: '{cleaned_text}'")
+        if cleaned_text != pre_final_cleanup:
+            logger.info(f"✅ Final comprehensive cleanup applied: '{pre_final_cleanup}' -> '{cleaned_text}'")
+        
         # Handle other entity types that might have markdown symbols
         # MessageEntityUnderline - no specific markdown symbol, handled by entities
-        # MessageEntityTextUrl - handled separately as they're links
         # MessageEntityCustomEmoji - no markdown symbols to clean
         
         if cleaned_text != text_content:
