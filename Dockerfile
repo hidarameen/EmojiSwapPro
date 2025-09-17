@@ -1,5 +1,5 @@
 # Use Python 3.11 slim image for smaller size
-FROM python:3.11-slim
+FROM python:3.11
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -69,12 +69,17 @@ HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=3 \
 # Expose port (optional for health check)
 EXPOSE 8080
 
-# Startup script
+# Startup script (يشغّل البوتين معًا)
 RUN echo '#!/bin/bash\n\
 set -e\n\
-echo "🚀 Starting Telegram Bot..."\n\
-python /app/run_control_bot.py\n\
+echo "🚀 Starting BOTH Telegram Bots..."\n\
+\n\
+# شغل اليوزر بوت في الخلفية\n\
+python /app/telegram_bot.py &\n\
+\n\
+# شغل البوت الرسمي في الواجهة\n\
+exec python /app/run_control_bot.py\n\
 ' > /app/start.sh && chmod +x /app/start.sh
 
-# Run bot
+# Run both bots
 CMD ["/app/start.sh"]
