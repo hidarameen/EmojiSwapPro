@@ -622,23 +622,107 @@ class TelegramEmojiBot:
         # Remove __ for MessageEntityItalic  
         if 'MessageEntityItalic' in entities_by_type:
             logger.info("Found italic entities, removing __ symbols")
-            if cleaned_text.startswith('__') and cleaned_text.endswith('__'):
-                cleaned_text = cleaned_text[2:-2]
-                logger.info(f"Removed __ symbols: '{text_content}' -> '{cleaned_text}'")
+            import re
+            original_cleaned = cleaned_text
+            
+            italic_entities = entities_by_type['MessageEntityItalic']
+            logger.info(f"Processing {len(italic_entities)} italic entities")
+            
+            # Remove all __ sequences (2 or more underscores together)
+            cleaned_text = re.sub(r'_{2,}', '', cleaned_text)
+            
+            if cleaned_text != original_cleaned:
+                logger.info(f"Removed all __ sequences: '{original_cleaned}' -> '{cleaned_text}'")
         
         # Remove ~~ for MessageEntityStrikethrough
         if 'MessageEntityStrikethrough' in entities_by_type:
             logger.info("Found strikethrough entities, removing ~~ symbols")
-            if cleaned_text.startswith('~~') and cleaned_text.endswith('~~'):
-                cleaned_text = cleaned_text[2:-2]
-                logger.info(f"Removed ~~ symbols: '{text_content}' -> '{cleaned_text}'")
+            import re
+            original_cleaned = cleaned_text
+            
+            strikethrough_entities = entities_by_type['MessageEntityStrikethrough']
+            logger.info(f"Processing {len(strikethrough_entities)} strikethrough entities")
+            
+            # Remove all ~~ sequences (2 or more tildes together)
+            cleaned_text = re.sub(r'~{2,}', '', cleaned_text)
+            
+            if cleaned_text != original_cleaned:
+                logger.info(f"Removed all ~~ sequences: '{original_cleaned}' -> '{cleaned_text}'")
         
         # Remove ` for MessageEntityCode (single backticks)
         if 'MessageEntityCode' in entities_by_type:
             logger.info("Found code entities, removing ` symbols")
-            if cleaned_text.startswith('`') and cleaned_text.endswith('`'):
-                cleaned_text = cleaned_text[1:-1]
-                logger.info(f"Removed ` symbols: '{text_content}' -> '{cleaned_text}'")
+            import re
+            original_cleaned = cleaned_text
+            
+            code_entities = entities_by_type['MessageEntityCode']
+            logger.info(f"Processing {len(code_entities)} code entities")
+            
+            # Remove single backticks
+            cleaned_text = cleaned_text.replace('`', '')
+            
+            if cleaned_text != original_cleaned:
+                logger.info(f"Removed ` symbols: '{original_cleaned}' -> '{cleaned_text}'")
+        
+        # Remove || for MessageEntitySpoiler (hidden text)
+        if 'MessageEntitySpoiler' in entities_by_type:
+            logger.info("Found spoiler entities, removing || symbols")
+            import re
+            original_cleaned = cleaned_text
+            
+            spoiler_entities = entities_by_type['MessageEntitySpoiler']
+            logger.info(f"Processing {len(spoiler_entities)} spoiler entities")
+            
+            # Remove all || sequences (2 or more pipes together)
+            cleaned_text = re.sub(r'\|{2,}', '', cleaned_text)
+            
+            if cleaned_text != original_cleaned:
+                logger.info(f"Removed all || sequences: '{original_cleaned}' -> '{cleaned_text}'")
+        
+        # Remove ``` for MessageEntityPre (code blocks)
+        if 'MessageEntityPre' in entities_by_type:
+            logger.info("Found pre/code block entities, removing ``` symbols")
+            import re
+            original_cleaned = cleaned_text
+            
+            pre_entities = entities_by_type['MessageEntityPre']
+            logger.info(f"Processing {len(pre_entities)} pre entities")
+            
+            # Remove triple backticks
+            cleaned_text = re.sub(r'```[a-zA-Z]*\n?', '', cleaned_text)  # Remove ```lang
+            cleaned_text = cleaned_text.replace('```', '')  # Remove closing ```
+            
+            if cleaned_text != original_cleaned:
+                logger.info(f"Removed ``` sequences: '{original_cleaned}' -> '{cleaned_text}'")
+        
+        # Remove > for MessageEntityBlockQuote (quotes)
+        if 'MessageEntityBlockQuote' in entities_by_type:
+            logger.info("Found blockquote entities, removing > symbols")
+            import re
+            original_cleaned = cleaned_text
+            
+            quote_entities = entities_by_type['MessageEntityBlockQuote']
+            logger.info(f"Processing {len(quote_entities)} blockquote entities")
+            
+            # Remove > at the beginning of lines
+            lines = cleaned_text.split('\n')
+            cleaned_lines = []
+            for line in lines:
+                if line.lstrip().startswith('> '):
+                    cleaned_lines.append(line.lstrip()[2:])  # Remove "> "
+                elif line.lstrip().startswith('>'):
+                    cleaned_lines.append(line.lstrip()[1:])   # Remove ">"
+                else:
+                    cleaned_lines.append(line)
+            cleaned_text = '\n'.join(cleaned_lines)
+            
+            if cleaned_text != original_cleaned:
+                logger.info(f"Removed > sequences: '{original_cleaned}' -> '{cleaned_text}'")
+        
+        # Handle other entity types that might have markdown symbols
+        # MessageEntityUnderline - no specific markdown symbol, handled by entities
+        # MessageEntityTextUrl - handled separately as they're links
+        # MessageEntityCustomEmoji - no markdown symbols to clean
         
         if cleaned_text != text_content:
             logger.info(f"Text cleaned from markdown symbols: '{text_content}' -> '{cleaned_text}'")
