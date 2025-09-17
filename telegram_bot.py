@@ -508,11 +508,14 @@ class TelegramEmojiBot:
         Helper function to properly merge entities with markdown parsing.
         This ensures both premium emojis and formatting (bold, italic, etc.) are preserved.
         Used by both text messages and media captions for consistent behavior.
-        Handles extracted emojis while preserving text structure and formatting.
+        PRESERVES ALL original text structure including line breaks and spacing.
         """
         # If no text content, return empty
         if not text_content:
             return text_content, message_entities or []
+        
+        # Store original text for comparison
+        original_text_content = text_content
         
         # Check if the text contains markdown-style formatting (like **text**)
         # that needs to be converted to proper Telegram entities
@@ -531,87 +534,122 @@ class TelegramEmojiBot:
                 # Parse the text with markdown to get proper formatting entities
                 parsed_text, parsed_entities = self.parse_mode.parse(text_content)
                 
-                # Check if parsing changed the text structure significantly
-                text_length_changed = len(parsed_text) != len(text_content)
-                if text_length_changed:
-                    logger.info(f"Text length changed during parsing: {len(text_content)} -> {len(parsed_text)}")
-                
-                # Merge existing entities with new formatting entities
-                final_entities = []
-                
-                # First, validate and adjust original entity positions
-                adjusted_original_entities = []
-                for entity in original_entities:
-                    # Check if this entity is still valid in the new text
-                    if (entity.offset + entity.length <= len(parsed_text)):
-                        # For custom emojis, ensure they still point to the correct text
-                        if isinstance(entity, MessageEntityCustomEmoji):
-                            # Custom emojis should be preserved even if text changed
-                            adjusted_original_entities.append(entity)
-                        else:
-                            # For other entities, verify the text content matches
-                            try:
-                                original_text_segment = text_content[entity.offset:entity.offset + entity.length]
-                                parsed_text_segment = parsed_text[entity.offset:entity.offset + entity.length]
-                                if original_text_segment == parsed_text_segment or isinstance(entity, MessageEntityCustomEmoji):
+                # CRITICAL: Check if parsing modified the text structure
+                if parsed_text != text_content:
+                    logger.warning(f"Markdown parsing changed text structure - preserving original structure")
+                    logger.info(f"Original: '{text_content[:100]}{'...' if len(text_content) > 100 else ''}'")
+                    logger.info(f"Parsed: '{parsed_text[:100]}{'...' if len(parsed_text) > 100 else ''}'")
+                    
+                    # If the structure changed significantly, use original text but try to preserve entities
+                    # This prevents loss of line breaks and spacing
+                    if len(parsed_text) != len(text_content):
+                        logger.info("Text length changed during parsing - using original text with adjusted entities")
+                        parsed_text = text_content  # Use original text structure
+                        # Keep only original entities since new positions may be invalid
+                        final_entities = original_entities[:]
+                    else:
+                        # Length same but content different - safe to proceed with merging
+                        final_entities = []
+                        
+                        # Validate and adjust original entity positions for the parsed text
+                        adjusted_original_entities = []
+                        for entity in original_entities:
+                            # Check if this entity is still valid in the new text
+                            if (entity.offset + entity.length <= len(parsed_text)):
+                                # For custom emojis, always preserve them
+                                if isinstance(entity, MessageEntityCustomEmoji):
                                     adjusted_original_entities.append(entity)
                                 else:
-                                    logger.debug(f"Entity text mismatch, skipping: {type(entity).__name__}")
-                            except IndexError:
-                                logger.debug(f"Entity out of bounds, skipping: {type(entity).__name__}")
-                    else:
-                        logger.debug(f"Entity beyond text bounds: {type(entity).__name__} at {entity.offset}-{entity.offset + entity.length} (text length: {len(parsed_text)})")
-                
-                # Add validated original entities
-                for entity in adjusted_original_entities:
-                    final_entities.append(entity)
-                
-                # Add new formatting entities from markdown parsing
-                # but avoid duplicates by checking for overlaps
-                for new_entity in parsed_entities:
-                    # Skip if this is a custom emoji entity (we already have those from original)
-                    if isinstance(new_entity, MessageEntityCustomEmoji):
-                        continue
-                    
-                    # Check if this entity overlaps with any existing entity
-                    overlaps = False
-                    for existing_entity in final_entities:
-                        # Allow custom emojis to coexist with other formatting
-                        if isinstance(existing_entity, MessageEntityCustomEmoji):
-                            continue
+                                    # For other entities, verify they're still valid
+                                    try:
+                                        if entity.offset + entity.length <= len(text_content) and entity.offset + entity.length <= len(parsed_text):
+                                            adjusted_original_entities.append(entity)
+                                        else:
+                                            logger.debug(f"Entity out of bounds, skipping: {type(entity).__name__}")
+                                    except IndexError:
+                                        logger.debug(f"Entity validation failed, skipping: {type(entity).__name__}")
+                            else:
+                                logger.debug(f"Entity beyond text bounds: {type(entity).__name__}")
                         
-                        # Check for actual overlap in position
-                        if (new_entity.offset < existing_entity.offset + existing_entity.length and
-                            new_entity.offset + new_entity.length > existing_entity.offset):
-                            overlaps = True
-                            break
+                        # Add validated original entities
+                        final_entities.extend(adjusted_original_entities)
+                        
+                        # Add new formatting entities from markdown parsing
+                        for new_entity in parsed_entities:
+                            # Skip if this is a custom emoji entity (we already have those from original)
+                            if isinstance(new_entity, MessageEntityCustomEmoji):
+                                continue
+                            
+                            # Check for overlaps with existing entities
+                            overlaps = False
+                            for existing_entity in final_entities:
+                                # Allow custom emojis to coexist with other formatting
+                                if isinstance(existing_entity, MessageEntityCustomEmoji):
+                                    continue
+                                
+                                # Check for actual overlap in position
+                                if (new_entity.offset < existing_entity.offset + existing_entity.length and
+                                    new_entity.offset + new_entity.length > existing_entity.offset):
+                                    overlaps = True
+                                    break
+                            
+                            # Only add if no overlap
+                            if not overlaps:
+                                final_entities.append(new_entity)
+                else:
+                    # Text structure preserved during parsing - safe to proceed
+                    final_entities = []
                     
-                    # Only add if no overlap
-                    if not overlaps:
-                        final_entities.append(new_entity)
+                    # Add original entities
+                    for entity in original_entities:
+                        final_entities.append(entity)
+                    
+                    # Add new formatting entities
+                    for new_entity in parsed_entities:
+                        if isinstance(new_entity, MessageEntityCustomEmoji):
+                            continue  # Skip duplicates
+                        
+                        overlaps = False
+                        for existing_entity in final_entities:
+                            if isinstance(existing_entity, MessageEntityCustomEmoji):
+                                continue
+                            
+                            if (new_entity.offset < existing_entity.offset + existing_entity.length and
+                                new_entity.offset + new_entity.length > existing_entity.offset):
+                                overlaps = True
+                                break
+                        
+                        if not overlaps:
+                            final_entities.append(new_entity)
                 
                 # Sort entities by offset to maintain proper order
                 final_entities.sort(key=lambda e: e.offset)
                 
-                logger.info(f"Successfully merged entities: {len(final_entities)} total ({len(adjusted_original_entities)} original + {len([e for e in parsed_entities if not isinstance(e, MessageEntityCustomEmoji)])} formatting)")
+                logger.info(f"Successfully merged entities while preserving text structure: {len(final_entities)} total entities")
                 return parsed_text, final_entities
                 
             except Exception as parse_error:
                 logger.warning(f"Failed to parse markdown for entity merging, using original entities: {parse_error}")
-                # Fallback to original entities - preserve structure
+                # Fallback to original entities - preserve structure completely
                 return text_content, original_entities
         elif needs_markdown_parse and not original_entities:
-            # No existing entities, but text has markdown - parse it
+            # No existing entities, but text has markdown - parse it carefully
             try:
                 parsed_text, parsed_entities = self.parse_mode.parse(text_content)
+                
+                # Check if parsing preserved the structure
+                if parsed_text != text_content:
+                    logger.warning(f"Markdown parsing changed text structure for text without entities - preserving original")
+                    return text_content, []
+                
                 logger.info(f"Parsed markdown for text without existing entities: {len(parsed_entities)} entities found")
                 return parsed_text, parsed_entities
             except Exception as parse_error:
                 logger.warning(f"Failed to parse markdown, using original text: {parse_error}")
                 return text_content, []
         else:
-            # No markdown parsing needed, use entities as-is
-            logger.info(f"No markdown parsing needed, preserving {len(original_entities)} original entities")
+            # No markdown parsing needed, use entities as-is and preserve text exactly
+            logger.info(f"No markdown parsing needed, preserving {len(original_entities)} original entities and original text structure")
             return text_content, original_entities
 
     async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
@@ -1717,7 +1755,7 @@ class TelegramEmojiBot:
         2. Converts hidden links containing emojis to plain text  
         3. Replaces emojis with premium versions in other contexts
         4. Handles malformed code blocks (single backticks)
-        5. Preserves line breaks and spacing structure
+        5. PRESERVES ALL original line breaks and spacing structure
         """
         import re
         
@@ -1739,7 +1777,7 @@ class TelegramEmojiBot:
             code_content = match.group(1)
             if emoji in code_content:
                 logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - removing code formatting but preserving content")
-                # حذف تنسيق الكود فقط مع الاحتفاظ بالمحتوى كما هو
+                # حذف تنسيق الكود فقط مع الاحتفاظ بالمحتوى كما هو تماماً
                 emoji_processed_in_formatting = True
                 logger.info(f"Code block formatting removed, content preserved: '{code_content}'")
                 return code_content  # إرجاع المحتوى بدون backticks مع الاحتفاظ بالتنسيق الداخلي
@@ -1798,27 +1836,9 @@ class TelegramEmojiBot:
             else:
                 logger.info(f"Replaced {original_count} '{emoji}' with '{replacement}' in normal text")
         
-        # Preserve original structure - only clean up excessive spaces within lines
-        # but preserve line breaks and paragraph structure
-        lines = text.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            # Clean up excessive spaces within each line but preserve the line structure
-            cleaned_line = re.sub(r' +', ' ', line.strip())
-            cleaned_lines.append(cleaned_line)
-        
-        # Join lines back with original line breaks
-        text = '\n'.join(cleaned_lines)
-        
-        # Remove empty lines only if they were created by the replacement process
-        # Don't remove intentional empty lines from the original text
-        if emoji_processed_in_formatting:
-            # Only remove completely empty lines that might have been created by removing formatting
-            lines = text.split('\n')
-            non_empty_lines = [line for line in lines if line.strip() or lines.index(line) == 0 or lines.index(line) == len(lines)-1]
-            if len(non_empty_lines) != len(lines):
-                text = '\n'.join(non_empty_lines)
-                logger.info(f"Removed empty lines created by formatting removal")
+        # CRITICAL FIX: Do NOT clean up, trim, or modify the text structure in any way
+        # PRESERVE EVERYTHING as is - spacing, line breaks, empty lines, etc.
+        # The only change should be emoji replacement and backtick removal
         
         # Check if the text actually changed after processing
         if text == original_text:
