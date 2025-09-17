@@ -1,4 +1,5 @@
-# Python cache and temporary files
+
+# Only ignore truly unnecessary files for production
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,7 +23,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Virtual environments
+# Virtual environments (not needed in container)
 .env
 .venv
 env/
@@ -31,7 +32,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDE and editor files
+# IDE files (not needed in production)
 .vscode/
 .idea/
 *.swp
@@ -40,41 +41,21 @@ venv.bak/
 .DS_Store
 Thumbs.db
 
-# Git
+# Git (not needed in container)
 .git/
 .gitignore
 
-# Logs
-*.log
-logs/
-telegram_bot.log
-
-# Session files (should be created in container with environment variables)
-*.session
+# Only ignore session files that will be created at runtime
 *.session-journal
 
-# Documentation
-README.md
-*.md
-
-# Docker files (not needed in container)
-Dockerfile
-.dockerignore
-docker-compose*.yml
-
-# Development files
-test_*.py
+# Test files (we want test_bot.py to be included)
 *_test.py
 tests/
 
-# Replit specific
-.replit
-replit.nix
-pyproject.toml
-uv.lock
-replit.md
-
-# Control bot (if not needed in production)
-control_bot.py
-run_control_bot.py
-requirements_control.txt
+# Keep all other files including:
+# - All .py files (including test_bot.py)
+# - All .txt requirements files
+# - All .md documentation files
+# - All .sh scripts
+# - All configuration files
+# - All deployment files
