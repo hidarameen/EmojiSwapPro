@@ -1685,7 +1685,7 @@ class TelegramEmojiBot:
     def _smart_emoji_replacement(self, text: str, emoji: str, replacement: str) -> str:
         """
         Smart emoji replacement that:
-        1. Converts code blocks containing emojis to plain text
+        1. Converts code blocks containing emojis to plain text (removes backticks completely)
         2. Converts hidden links containing emojis to plain text  
         3. Replaces emojis with premium versions in other contexts
         4. Handles malformed code blocks (single backticks)
@@ -1709,24 +1709,31 @@ class TelegramEmojiBot:
             nonlocal emoji_processed_in_formatting
             code_content = match.group(1)
             if emoji in code_content:
-                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - removing code formatting")
-                # Step 1: Remove code formatting (backticks) and return plain text
-                logger.info(f"Code block removed, plain text result: '{code_content}'")
-                return code_content  # Return plain content without backticks, emoji will be processed later
+                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - COMPLETELY removing code formatting")
+                # حذف تنسيق الكود بالكامل وإرجاع النص العادي فقط
+                emoji_processed_in_formatting = True
+                logger.info(f"Code block formatting COMPLETELY REMOVED, plain text result: '{code_content}'")
+                return code_content  # إرجاع المحتوى بدون backticks نهائياً
             # Keep original if no target emoji
             return match.group(0)
         
-        # Apply code block handling
+        # Apply code block handling - this will remove backticks completely when emoji is found
         text = re.sub(code_pattern, handle_code_blocks, text)
-        logger.info(f"After code block processing: '{text}'")
+        logger.info(f"After code block processing (formatting removed): '{text}'")
         
         # Handle malformed code blocks (single backticks that don't form proper blocks)
         # This removes stray backticks that might interfere with markdown parsing
         if '`' in text and not re.search(r'`[^`]*`', text):
-            logger.info(f"Found stray backticks in text, removing them")
+            logger.info(f"Found stray backticks in text, removing them completely")
             # Remove single backticks that don't form proper code blocks
             text = text.replace('`', '')
             logger.info(f"After removing stray backticks: '{text}'")
+        
+        # Special handling: if we found emoji in code formatting, remove ALL remaining backticks
+        if emoji_processed_in_formatting and '`' in text:
+            logger.info(f"Emoji was found in code formatting - removing ALL remaining backticks from text")
+            text = text.replace('`', '')
+            logger.info(f"After removing all backticks: '{text}'")
         
         # Second pass: handle markdown links with emojis
         def handle_links(match):
@@ -1752,15 +1759,15 @@ class TelegramEmojiBot:
         text = re.sub(link_pattern, handle_links, text)
         logger.info(f"After link processing: '{text}'")
         
-        # Third pass: replace any remaining emojis in normal text (only if not already processed in formatting)
-        if not emoji_processed_in_formatting:
-            escaped_emoji = re.escape(emoji)
-            original_count = len(re.findall(escaped_emoji, text))
-            if original_count > 0:
-                text = re.sub(escaped_emoji, replacement, text)
-                logger.info(f"Replaced {original_count} remaining '{emoji}' with '{replacement}' in normal text")
-        else:
-            logger.info(f"Emoji '{emoji}' was already processed in code formatting - code marks removed and emoji replaced")
+        # Third pass: replace any remaining emojis in normal text
+        escaped_emoji = re.escape(emoji)
+        original_count = len(re.findall(escaped_emoji, text))
+        if original_count > 0:
+            text = re.sub(escaped_emoji, replacement, text)
+            if emoji_processed_in_formatting:
+                logger.info(f"Replaced {original_count} '{emoji}' with '{replacement}' after removing code formatting")
+            else:
+                logger.info(f"Replaced {original_count} '{emoji}' with '{replacement}' in normal text")
         
         # Clean up excessive whitespace
         text = re.sub(r'\s+', ' ', text).strip()
@@ -1773,6 +1780,9 @@ class TelegramEmojiBot:
             if emoji_processed_in_formatting:
                 logger.info("Forcing text change to ensure successful edit")
                 # The replacement already contains the markdown format, so we're good
+        
+        if emoji_processed_in_formatting:
+            logger.info(f"✅ SUCCESSFULLY removed code formatting and replaced emoji: '{emoji}' -> '{replacement}'")
         
         logger.info(f"Final result after smart replacement: '{text}'")
         return text
