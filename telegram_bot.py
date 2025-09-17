@@ -460,6 +460,85 @@ class TelegramEmojiBot:
             logger.error(f"Failed to deactivate forwarding task: {e}")
             return False
 
+    async def get_updated_message_after_replacement(self, event):
+        """
+        الحصول على الرسالة المحدثة بعد تطبيق الاستبدال مع الحفاظ على جميع التنسيقات
+        """
+        try:
+            # انتظار قصير للتأكد من انتهاء عملية التحديث
+            await asyncio.sleep(0.3)
+            
+            # محاولة الحصول على النسخة المحدثة من الرسالة
+            for attempt in range(5):  # زيادة عدد المحاولات
+                try:
+                    # الحصول على الرسالة المحدثة من الخادم
+                    updated_message = await self.client.get_messages(
+                        event.chat, 
+                        ids=event.message.id
+                    )
+                    
+                    if isinstance(updated_message, list) and len(updated_message) > 0:
+                        updated_message = updated_message[0]
+                    
+                    if updated_message is None:
+                        logger.warning(f"Could not retrieve message {event.message.id}, attempt {attempt + 1}")
+                        if attempt < 4:
+                            await asyncio.sleep(0.2)
+                            continue
+                        else:
+                            return event.message
+                    
+                    # فحص ما إذا كانت الرسالة تحتوي على إيموجي مميز (دليل على نجاح الاستبدال)
+                    has_premium_emojis = False
+                    if updated_message.entities:
+                        has_premium_emojis = any(
+                            isinstance(entity, MessageEntityCustomEmoji) 
+                            for entity in updated_message.entities
+                        )
+                    
+                    # فحص ما إذا كان النص يحتوي على markdown للإيموجي المميز
+                    updated_text = updated_message.text or updated_message.message or ""
+                    has_premium_markdown = "[" in updated_text and "](emoji/" in updated_text
+                    
+                    # إذا وُجدت علامات الاستبدال، استخدم الرسالة المحدثة
+                    if has_premium_emojis or has_premium_markdown:
+                        logger.info(f"Successfully retrieved updated message with emoji replacements for forwarding")
+                        logger.info(f"Message has {len(updated_message.entities or [])} entities")
+                        if updated_message.entities:
+                            premium_count = sum(1 for e in updated_message.entities if isinstance(e, MessageEntityCustomEmoji))
+                            logger.info(f"Message contains {premium_count} premium emojis")
+                        return updated_message
+                    
+                    # إذا لم توجد علامات الاستبدال ولكن المحتوى تغير، استخدم المحدث
+                    original_text = event.message.text or event.message.message or ""
+                    if updated_text != original_text:
+                        logger.info(f"Message text changed, using updated version for forwarding")
+                        return updated_message
+                    
+                    # إذا لم تحدث تغييرات واضحة، انتظر أكثر
+                    if attempt < 4:
+                        logger.debug(f"No obvious changes detected in attempt {attempt + 1}, waiting...")
+                        await asyncio.sleep(0.3)
+                        continue
+                    else:
+                        logger.info(f"Using original message after {attempt + 1} attempts")
+                        return event.message
+                        
+                except Exception as fetch_error:
+                    logger.warning(f"Error fetching updated message, attempt {attempt + 1}: {fetch_error}")
+                    if attempt < 4:
+                        await asyncio.sleep(0.2)
+                        continue
+                    else:
+                        logger.info("Using original message due to fetch errors")
+                        return event.message
+            
+            return event.message
+            
+        except Exception as e:
+            logger.error(f"Error getting updated message: {e}")
+            return event.message
+
     async def forward_message_to_targets(self, source_channel_id: int, message):
         """Copy message content to all target channels for this source"""
         try:
@@ -653,8 +732,24 @@ class TelegramEmojiBot:
             return text_content, original_entities
 
     async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
-        """Copy message content to target channel with full formatting preservation"""
+        """Copy message content to target channel with full formatting preservation after emoji replacement"""
         try:
+            # تحقق من حالة الاستبدال للقناة المصدر
+            replacement_enabled = self.channel_replacement_status.get(source_channel_id, True)
+            
+            logger.info(f"Copying message from {source_channel_id} to {target_channel_id}")
+            logger.info(f"Replacement status for source channel: {'enabled' if replacement_enabled else 'disabled'}")
+            
+            # عرض تفاصيل الرسالة الحالية
+            current_text = message.text or message.message or ""
+            if current_text:
+                logger.info(f"Message text: '{current_text[:100]}{'...' if len(current_text) > 100 else ''}'")
+            
+            if message.entities:
+                premium_emoji_count = sum(1 for e in message.entities if isinstance(e, MessageEntityCustomEmoji))
+                total_entities = len(message.entities)
+                logger.info(f"Message entities: {total_entities} total, {premium_emoji_count} premium emojis")
+            
             # Check media messages first (including those with captions)
             # This ensures media with captions are handled as media, not text
             if message.media:
@@ -684,34 +779,16 @@ class TelegramEmojiBot:
                         
                         # Add caption and entities if they exist
                         if caption:
-                            logger.info(f"Original caption: '{caption}'")
-                            logger.info(f"Original caption entities: {len(message.entities or [])} entities")
+                            logger.info(f"Processing media caption: '{caption}'")
+                            logger.info(f"Caption entities: {len(message.entities or [])} entities")
                             
-                            # Log original entities for debugging
-                            if message.entities:
-                                for i, entity in enumerate(message.entities):
-                                    entity_type = type(entity).__name__
-                                    if hasattr(entity, 'document_id'):
-                                        logger.info(f"  Original[{i}]: {entity_type} at {entity.offset}-{entity.offset + entity.length}, ID: {entity.document_id}")
-                                    else:
-                                        logger.info(f"  Original[{i}]: {entity_type} at {entity.offset}-{entity.offset + entity.length}")
+                            # استخدام الرسالة كما هي بعد الاستبدال (بدون معالجة إضافية)
+                            # لأن الاستبدال تم بالفعل في المصدر
+                            send_file_kwargs['caption'] = caption
+                            send_file_kwargs['formatting_entities'] = message.entities or []
                             
-                            # Use the entity merging helper for proper formatting preservation in captions
-                            final_caption, final_entities = self._merge_entities_with_formatting(caption, message.entities)
-                            
-                            send_file_kwargs['caption'] = final_caption
-                            send_file_kwargs['formatting_entities'] = final_entities
-                            
-                            logger.info(f"Final caption: '{final_caption}'")
-                            logger.info(f"Final caption entities: {len(final_entities)} total entities")
-                            
-                            # Log final entity details for debugging
-                            for i, entity in enumerate(final_entities):
-                                entity_type = type(entity).__name__
-                                if hasattr(entity, 'document_id'):
-                                    logger.info(f"  Final[{i}]: {entity_type} at {entity.offset}-{entity.offset + entity.length}, ID: {entity.document_id}")
-                                else:
-                                    logger.info(f"  Final[{i}]: {entity_type} at {entity.offset}-{entity.offset + entity.length}")
+                            logger.info(f"Using caption as-is after replacement: '{caption}'")
+                            logger.info(f"Using entities as-is: {len(message.entities or [])} entities")
                         else:
                             logger.info("Sending media without caption")
                         
@@ -826,51 +903,63 @@ class TelegramEmojiBot:
                         return
                             
             elif message.text or message.message:
-                # Pure text message (no media) - preserve ALL formatting entities including:
-                # - Bold, Italic, Underline, Strikethrough
-                # - Code, Pre (code blocks)
-                # - Links, Mentions
-                # - Custom emojis
-                # - Spoilers
-                # - And all other Telegram formatting
+                # Pure text message (no media) - preserve ALL formatting entities after replacement
                 text_content = message.text or message.message
+                
+                logger.info(f"Copying text message: '{text_content[:100]}{'...' if len(text_content) > 100 else ''}'")
                 
                 # Log the entities being preserved for debugging
                 if message.entities:
-                    logger.info(f"Preserving {len(message.entities)} formatting entities for text copying")
-                    premium_emoji_count = 0
-                    for entity in message.entities:
-                        entity_type = type(entity).__name__
-                        if isinstance(entity, MessageEntityCustomEmoji):
-                            premium_emoji_count += 1
-                            logger.info(f"  - Premium Emoji: {entity_type} at offset {entity.offset}, length {entity.length}, ID: {entity.document_id}")
-                        else:
-                            logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
+                    premium_emoji_count = sum(1 for e in message.entities if isinstance(e, MessageEntityCustomEmoji))
+                    other_entities = len(message.entities) - premium_emoji_count
                     
-                    logger.info(f"Copying message with {premium_emoji_count} premium emojis and {len(message.entities) - premium_emoji_count} other formatting entities")
+                    logger.info(f"Text message entities: {len(message.entities)} total")
+                    logger.info(f"  - Premium emojis: {premium_emoji_count}")
+                    logger.info(f"  - Other formatting: {other_entities}")
+                    
+                    # تفاصيل الإيموجي المميز للتأكد من نجاح الاستبدال
+                    for entity in message.entities:
+                        if isinstance(entity, MessageEntityCustomEmoji):
+                            logger.info(f"  - Premium Emoji ID {entity.document_id} at position {entity.offset}-{entity.offset + entity.length}")
                 
-                # Use the unified entity merging helper for consistent behavior
-                final_text, final_entities = self._merge_entities_with_formatting(text_content, message.entities)
-                
+                # استخدام الرسالة مباشرة بعد الاستبدال بدون معالجة إضافية
                 try:
                     await self.client.send_message(
                         entity=target_channel_id,
-                        message=final_text,
-                        formatting_entities=final_entities,
-                        link_preview=False
+                        message=text_content,
+                        formatting_entities=message.entities,
+                        link_preview=False,
+                        parse_mode=None  # استخدام الكيانات مباشرة
                     )
-                    logger.info(f"Successfully sent text message with {len(final_entities)} properly merged entities")
+                    logger.info(f"Successfully sent text message with {len(message.entities or [])} entities preserved")
                 except Exception as text_error:
-                    logger.warning(f"Failed to send text with entities, trying fallback: {text_error}")
-                    # Fallback: try with original entities only
+                    logger.warning(f"Failed to send text with entities, trying alternative approach: {text_error}")
+                    
+                    # محاولة بديلة: إرسال النص مع كيانات التنسيق فقط
                     try:
-                        await self.client.send_message(
-                            entity=target_channel_id,
-                            message=text_content,
-                            formatting_entities=message.entities,
-                            link_preview=False
-                        )
-                        logger.info("Successfully sent text message with original entities as fallback")
+                        # فصل الإيموجي المميز عن باقي التنسيقات
+                        premium_emojis = [e for e in (message.entities or []) if isinstance(e, MessageEntityCustomEmoji)]
+                        other_entities = [e for e in (message.entities or []) if not isinstance(e, MessageEntityCustomEmoji)]
+                        
+                        if premium_emojis:
+                            # إرسال مع جميع الكيانات بما في ذلك الإيموجي المميز
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=text_content,
+                                formatting_entities=message.entities,
+                                link_preview=False
+                            )
+                            logger.info(f"Successfully sent with all entities including {len(premium_emojis)} premium emojis")
+                        else:
+                            # إرسال مع التنسيقات الأخرى فقط
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=text_content,
+                                formatting_entities=other_entities,
+                                link_preview=False
+                            )
+                            logger.info(f"Successfully sent with {len(other_entities)} non-premium entities")
+                        
                     except Exception as fallback_error:
                         logger.error(f"All text sending methods failed: {fallback_error}")
                         # Final fallback: plain text
@@ -5138,36 +5227,10 @@ class TelegramEmojiBot:
                         await self.replace_emojis_in_message(event)
                         
                         # Then handle forwarding (after emoji replacement)
-                        # Wait a moment to ensure the edit is processed
-                        await asyncio.sleep(0.5)
+                        # Get the most recent version of the message after emoji replacement
+                        updated_message = await self.get_updated_message_after_replacement(event)
                         
-                        # Get the updated message after emoji replacement
-                        updated_message = event.message
-                        try:
-                            # Try to get the most recent version of the message with retries
-                            for attempt in range(3):
-                                updated_message = await self.client.get_messages(event.chat, ids=event.message.id)
-                                if isinstance(updated_message, list) and len(updated_message) > 0:
-                                    updated_message = updated_message[0]
-                                
-                                # Check if the message has premium emojis (indicating successful replacement)
-                                if updated_message.entities:
-                                    has_premium_emojis = any(
-                                        isinstance(entity, MessageEntityCustomEmoji) 
-                                        for entity in updated_message.entities
-                                    )
-                                    if has_premium_emojis:
-                                        logger.info(f"Successfully retrieved updated message with premium emojis for forwarding")
-                                        break
-                                
-                                if attempt < 2:  # Don't sleep on the last attempt
-                                    await asyncio.sleep(0.5)  # Wait before retry
-                            else:
-                                logger.debug(f"Using original message for forwarding (no premium emojis found after replacement)")
-                        except Exception as e:
-                            logger.warning(f"Could not fetch updated message, using original: {e}")
-                            updated_message = event.message
-                        
+                        # Forward the updated message with all formatting preserved
                         await self.forward_message_to_targets(event_peer_id, updated_message)
                         logger.info(f"Finished processing message in channel {event_peer_id}")
                 except Exception as e:
