@@ -1699,14 +1699,19 @@ class TelegramEmojiBot:
         # Pattern for markdown links [text](url) - more precise
         link_pattern = r'\[([^\]]*)\]\(([^\)]*)\)'
         
+        # Track if emoji was found in special formatting
+        emoji_processed_in_formatting = False
+        
         # First pass: handle code blocks with emojis
         def handle_code_blocks(match):
+            nonlocal emoji_processed_in_formatting
             code_content = match.group(1)
             if emoji in code_content:
                 logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - converting to plain text")
                 # Convert to plain text and replace emoji
                 plain_result = code_content.replace(emoji, replacement)
                 logger.info(f"Code block converted to plain text: '{plain_result}'")
+                emoji_processed_in_formatting = True
                 return plain_result
             # Keep original if no target emoji
             return match.group(0)
@@ -1717,14 +1722,20 @@ class TelegramEmojiBot:
         
         # Second pass: handle markdown links with emojis
         def handle_links(match):
+            nonlocal emoji_processed_in_formatting
             link_text = match.group(1)
             link_url = match.group(2)
+            
+            # Skip if this is already a premium emoji link we created
+            if link_url.startswith('emoji/'):
+                return match.group(0)
             
             if emoji in link_text:
                 logger.info(f"Found emoji '{emoji}' in link text: '[{link_text}]({link_url})' - converting to plain text")
                 # Convert to plain text and replace emoji - only keep the text part
                 plain_result = link_text.replace(emoji, replacement)
                 logger.info(f"Link converted to plain text: '{plain_result}'")
+                emoji_processed_in_formatting = True
                 return plain_result
             # Keep original if no target emoji
             return match.group(0)
@@ -1733,12 +1744,15 @@ class TelegramEmojiBot:
         text = re.sub(link_pattern, handle_links, text)
         logger.info(f"After link processing: '{text}'")
         
-        # Third pass: replace any remaining emojis in normal text
-        escaped_emoji = re.escape(emoji)
-        original_count = len(re.findall(escaped_emoji, text))
-        if original_count > 0:
-            text = re.sub(escaped_emoji, replacement, text)
-            logger.info(f"Replaced {original_count} remaining '{emoji}' with '{replacement}' in normal text")
+        # Third pass: replace any remaining emojis in normal text (only if not already processed in formatting)
+        if not emoji_processed_in_formatting:
+            escaped_emoji = re.escape(emoji)
+            original_count = len(re.findall(escaped_emoji, text))
+            if original_count > 0:
+                text = re.sub(escaped_emoji, replacement, text)
+                logger.info(f"Replaced {original_count} remaining '{emoji}' with '{replacement}' in normal text")
+        else:
+            logger.info(f"Emoji '{emoji}' was already processed in formatting, skipping normal text replacement")
         
         # Clean up excessive whitespace
         text = re.sub(r'\s+', ' ', text).strip()
