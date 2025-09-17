@@ -1688,12 +1688,13 @@ class TelegramEmojiBot:
         1. Converts code blocks containing emojis to plain text
         2. Converts hidden links containing emojis to plain text  
         3. Replaces emojis with premium versions in other contexts
+        4. Handles malformed code blocks (single backticks)
         """
         import re
         
         logger.info(f"Starting smart replacement for emoji '{emoji}' in text: '{text}'")
         
-        # Pattern for code blocks (inline code within backticks)
+        # Pattern for proper code blocks (inline code within matching backticks)
         code_pattern = r'`([^`]*)`'
         
         # Pattern for markdown links [text](url) - more precise
@@ -1702,7 +1703,7 @@ class TelegramEmojiBot:
         # Track if emoji was found in special formatting
         emoji_processed_in_formatting = False
         
-        # First pass: handle code blocks with emojis
+        # First pass: handle proper code blocks with emojis
         def handle_code_blocks(match):
             nonlocal emoji_processed_in_formatting
             code_content = match.group(1)
@@ -1719,6 +1720,14 @@ class TelegramEmojiBot:
         # Apply code block handling
         text = re.sub(code_pattern, handle_code_blocks, text)
         logger.info(f"After code block processing: '{text}'")
+        
+        # Handle malformed code blocks (single backticks that don't form proper blocks)
+        # This removes stray backticks that might interfere with markdown parsing
+        if '`' in text and not re.search(r'`[^`]*`', text):
+            logger.info(f"Found stray backticks in text, cleaning them up")
+            # Remove single backticks that don't form proper code blocks
+            text = text.replace('`', '')
+            logger.info(f"After cleaning stray backticks: '{text}'")
         
         # Second pass: handle markdown links with emojis
         def handle_links(match):
