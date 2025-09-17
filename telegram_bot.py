@@ -1709,12 +1709,10 @@ class TelegramEmojiBot:
             nonlocal emoji_processed_in_formatting
             code_content = match.group(1)
             if emoji in code_content:
-                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - removing code formatting and replacing emoji")
-                # Remove code formatting and replace emoji with premium version
-                plain_result = code_content.replace(emoji, replacement)
-                logger.info(f"Code block processed - removed `` and replaced emoji: '{plain_result}'")
-                emoji_processed_in_formatting = True
-                return plain_result
+                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - removing code formatting")
+                # Step 1: Remove code formatting (backticks) and return plain text
+                logger.info(f"Code block removed, plain text result: '{code_content}'")
+                return code_content  # Return plain content without backticks, emoji will be processed later
             # Keep original if no target emoji
             return match.group(0)
         
