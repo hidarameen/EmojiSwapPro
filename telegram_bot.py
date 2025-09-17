@@ -508,7 +508,7 @@ class TelegramEmojiBot:
         Helper function to properly merge entities with markdown parsing.
         This ensures both premium emojis and formatting (bold, italic, etc.) are preserved.
         Used by both text messages and media captions for consistent behavior.
-        Handles extracted emojis that are now outside their original formatting.
+        Handles extracted emojis while preserving text structure and formatting.
         """
         # If no text content, return empty
         if not text_content:
@@ -531,28 +531,56 @@ class TelegramEmojiBot:
                 # Parse the text with markdown to get proper formatting entities
                 parsed_text, parsed_entities = self.parse_mode.parse(text_content)
                 
+                # Check if parsing changed the text structure significantly
+                text_length_changed = len(parsed_text) != len(text_content)
+                if text_length_changed:
+                    logger.info(f"Text length changed during parsing: {len(text_content)} -> {len(parsed_text)}")
+                
                 # Merge existing entities with new formatting entities
                 final_entities = []
                 
-                # First, adjust original entity positions if text has changed due to emoji extraction
+                # First, validate and adjust original entity positions
                 adjusted_original_entities = []
                 for entity in original_entities:
                     # Check if this entity is still valid in the new text
                     if (entity.offset + entity.length <= len(parsed_text)):
-                        adjusted_original_entities.append(entity)
+                        # For custom emojis, ensure they still point to the correct text
+                        if isinstance(entity, MessageEntityCustomEmoji):
+                            # Custom emojis should be preserved even if text changed
+                            adjusted_original_entities.append(entity)
+                        else:
+                            # For other entities, verify the text content matches
+                            try:
+                                original_text_segment = text_content[entity.offset:entity.offset + entity.length]
+                                parsed_text_segment = parsed_text[entity.offset:entity.offset + entity.length]
+                                if original_text_segment == parsed_text_segment or isinstance(entity, MessageEntityCustomEmoji):
+                                    adjusted_original_entities.append(entity)
+                                else:
+                                    logger.debug(f"Entity text mismatch, skipping: {type(entity).__name__}")
+                            except IndexError:
+                                logger.debug(f"Entity out of bounds, skipping: {type(entity).__name__}")
                     else:
-                        logger.debug(f"Skipping invalid original entity: {type(entity).__name__} at {entity.offset}-{entity.offset + entity.length}")
+                        logger.debug(f"Entity beyond text bounds: {type(entity).__name__} at {entity.offset}-{entity.offset + entity.length} (text length: {len(parsed_text)})")
                 
-                # Add adjusted original entities (including custom emojis and existing formatting)
+                # Add validated original entities
                 for entity in adjusted_original_entities:
                     final_entities.append(entity)
                 
                 # Add new formatting entities from markdown parsing
                 # but avoid duplicates by checking for overlaps
                 for new_entity in parsed_entities:
+                    # Skip if this is a custom emoji entity (we already have those from original)
+                    if isinstance(new_entity, MessageEntityCustomEmoji):
+                        continue
+                    
                     # Check if this entity overlaps with any existing entity
                     overlaps = False
                     for existing_entity in final_entities:
+                        # Allow custom emojis to coexist with other formatting
+                        if isinstance(existing_entity, MessageEntityCustomEmoji):
+                            continue
+                        
+                        # Check for actual overlap in position
                         if (new_entity.offset < existing_entity.offset + existing_entity.length and
                             new_entity.offset + new_entity.length > existing_entity.offset):
                             overlaps = True
@@ -565,12 +593,12 @@ class TelegramEmojiBot:
                 # Sort entities by offset to maintain proper order
                 final_entities.sort(key=lambda e: e.offset)
                 
-                logger.info(f"Merged entities: {len(final_entities)} total entities (from {len(adjusted_original_entities)} adjusted original + {len(parsed_entities)} parsed, after overlap removal)")
+                logger.info(f"Successfully merged entities: {len(final_entities)} total ({len(adjusted_original_entities)} original + {len([e for e in parsed_entities if not isinstance(e, MessageEntityCustomEmoji)])} formatting)")
                 return parsed_text, final_entities
                 
             except Exception as parse_error:
                 logger.warning(f"Failed to parse markdown for entity merging, using original entities: {parse_error}")
-                # Fallback to original entities
+                # Fallback to original entities - preserve structure
                 return text_content, original_entities
         elif needs_markdown_parse and not original_entities:
             # No existing entities, but text has markdown - parse it
@@ -1685,10 +1713,11 @@ class TelegramEmojiBot:
     def _smart_emoji_replacement(self, text: str, emoji: str, replacement: str) -> str:
         """
         Smart emoji replacement that:
-        1. Converts code blocks containing emojis to plain text (removes backticks completely)
+        1. Converts code blocks containing emojis to plain text (removes backticks but preserves content structure)
         2. Converts hidden links containing emojis to plain text  
         3. Replaces emojis with premium versions in other contexts
         4. Handles malformed code blocks (single backticks)
+        5. Preserves line breaks and spacing structure
         """
         import re
         
@@ -1709,29 +1738,29 @@ class TelegramEmojiBot:
             nonlocal emoji_processed_in_formatting
             code_content = match.group(1)
             if emoji in code_content:
-                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - COMPLETELY removing code formatting")
-                # حذف تنسيق الكود بالكامل وإرجاع النص العادي فقط
+                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - removing code formatting but preserving content")
+                # حذف تنسيق الكود فقط مع الاحتفاظ بالمحتوى كما هو
                 emoji_processed_in_formatting = True
-                logger.info(f"Code block formatting COMPLETELY REMOVED, plain text result: '{code_content}'")
-                return code_content  # إرجاع المحتوى بدون backticks نهائياً
+                logger.info(f"Code block formatting removed, content preserved: '{code_content}'")
+                return code_content  # إرجاع المحتوى بدون backticks مع الاحتفاظ بالتنسيق الداخلي
             # Keep original if no target emoji
             return match.group(0)
         
-        # Apply code block handling - this will remove backticks completely when emoji is found
+        # Apply code block handling - this will remove backticks but preserve content structure
         text = re.sub(code_pattern, handle_code_blocks, text)
-        logger.info(f"After code block processing (formatting removed): '{text}'")
+        logger.info(f"After code block processing: '{text}'")
         
         # Handle malformed code blocks (single backticks that don't form proper blocks)
-        # This removes stray backticks that might interfere with markdown parsing
+        # Only remove stray backticks, don't affect spacing
         if '`' in text and not re.search(r'`[^`]*`', text):
-            logger.info(f"Found stray backticks in text, removing them completely")
+            logger.info(f"Found stray backticks in text, removing them")
             # Remove single backticks that don't form proper code blocks
             text = text.replace('`', '')
             logger.info(f"After removing stray backticks: '{text}'")
         
         # Special handling: if we found emoji in code formatting, remove ALL remaining backticks
         if emoji_processed_in_formatting and '`' in text:
-            logger.info(f"Emoji was found in code formatting - removing ALL remaining backticks from text")
+            logger.info(f"Emoji was found in code formatting - removing remaining backticks")
             text = text.replace('`', '')
             logger.info(f"After removing all backticks: '{text}'")
         
@@ -1765,26 +1794,44 @@ class TelegramEmojiBot:
         if original_count > 0:
             text = re.sub(escaped_emoji, replacement, text)
             if emoji_processed_in_formatting:
-                logger.info(f"Replaced {original_count} '{emoji}' with '{replacement}' after removing code formatting")
+                logger.info(f"Replaced {original_count} '{emoji}' with '{replacement}' after removing special formatting")
             else:
                 logger.info(f"Replaced {original_count} '{emoji}' with '{replacement}' in normal text")
         
-        # Clean up excessive whitespace
-        text = re.sub(r'\s+', ' ', text).strip()
+        # Preserve original structure - only clean up excessive spaces within lines
+        # but preserve line breaks and paragraph structure
+        lines = text.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            # Clean up excessive spaces within each line but preserve the line structure
+            cleaned_line = re.sub(r' +', ' ', line.strip())
+            cleaned_lines.append(cleaned_line)
+        
+        # Join lines back with original line breaks
+        text = '\n'.join(cleaned_lines)
+        
+        # Remove empty lines only if they were created by the replacement process
+        # Don't remove intentional empty lines from the original text
+        if emoji_processed_in_formatting:
+            # Only remove completely empty lines that might have been created by removing formatting
+            lines = text.split('\n')
+            non_empty_lines = [line for line in lines if line.strip() or lines.index(line) == 0 or lines.index(line) == len(lines)-1]
+            if len(non_empty_lines) != len(lines):
+                text = '\n'.join(non_empty_lines)
+                logger.info(f"Removed empty lines created by formatting removal")
         
         # Check if the text actually changed after processing
         if text == original_text:
-            logger.warning(f"Text unchanged after processing '{original_text}' - this may cause Telegram edit errors")
-            # Force a change by adding invisible character if needed to ensure edit works
-            # But only if we know we processed an emoji in formatting
+            logger.warning(f"Text unchanged after processing - this may cause Telegram edit errors")
+            # Force a minimal change only if we processed emoji in formatting
             if emoji_processed_in_formatting:
-                logger.info("Forcing text change to ensure successful edit")
-                # Add zero-width space to ensure text is different
+                logger.info("Adding minimal change marker to ensure successful edit")
+                # Add zero-width space at the end to ensure text is different
                 text = text + "\u200B"
-                logger.info(f"Added zero-width space, new text: '{text}'")
+                logger.info(f"Added zero-width space for successful edit")
         
         if emoji_processed_in_formatting:
-            logger.info(f"✅ SUCCESSFULLY removed code formatting and replaced emoji: '{emoji}' -> '{replacement}'")
+            logger.info(f"✅ SUCCESSFULLY removed special formatting and replaced emoji: '{emoji}' -> '{replacement}'")
         
         logger.info(f"Final result after smart replacement: '{text}'")
         return text
