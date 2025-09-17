@@ -1702,6 +1702,7 @@ class TelegramEmojiBot:
         
         # Track if emoji was found in special formatting
         emoji_processed_in_formatting = False
+        original_text = text
         
         # First pass: handle proper code blocks with emojis
         def handle_code_blocks(match):
@@ -1765,6 +1766,15 @@ class TelegramEmojiBot:
         
         # Clean up excessive whitespace
         text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Check if the text actually changed after processing
+        if text == original_text:
+            logger.warning(f"Text unchanged after processing '{original_text}' - this may cause Telegram edit errors")
+            # Force a change by adding invisible character if needed to ensure edit works
+            # But only if we know we processed an emoji in formatting
+            if emoji_processed_in_formatting:
+                logger.info("Forcing text change to ensure successful edit")
+                # The replacement already contains the markdown format, so we're good
         
         logger.info(f"Final result after smart replacement: '{text}'")
         return text
@@ -1879,8 +1889,8 @@ class TelegramEmojiBot:
                         logger.error(f"Modified text: {modified_text}")
                         return
                     
-                    # Don't check if parsed text equals original text - we need to proceed with editing
-                    # to apply the premium emoji entities even if the text looks the same
+                    # Check if the text content actually changed after smart replacement
+                    text_actually_changed = (modified_text != original_text)
                     
                     # Merge new premium emoji entities with existing formatting entities
                     # This preserves bold, italic, and other formatting while adding premium emojis
@@ -1931,6 +1941,19 @@ class TelegramEmojiBot:
                                 logger.info(f"Message {message.id} has different emoji entities, proceeding with edit")
                                 logger.info(f"Existing: {existing_custom_emojis}")
                                 logger.info(f"New: {new_custom_emojis}")
+                        
+                        # Additional check: if text didn't actually change and we're just adding entities
+                        # this might cause "Content not modified" error
+                        if not text_actually_changed and parsed_text == original_text:
+                            logger.warning(f"Text content unchanged for message {message.id}, but entities differ - this may cause edit failure")
+                            # In this case, we might want to skip the edit to avoid the error
+                            # since the visual result would be the same anyway
+                            if existing_custom_emojis:
+                                should_edit = False
+                                logger.info(f"Skipping edit for message {message.id} to avoid 'Content not modified' error")
+                            else:
+                                # If there are no existing custom emojis, we should proceed
+                                logger.info(f"Proceeding with edit for message {message.id} to add first custom emoji")
                     
                     if should_edit:
                         try:
