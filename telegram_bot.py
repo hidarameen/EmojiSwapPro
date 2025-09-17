@@ -749,12 +749,14 @@ class TelegramEmojiBot:
                             logger.info(f"Processing media caption: '{caption}'")
                             logger.info(f"Caption entities: {len(message.entities or [])} entities")
                             
-                            # استخدام الرسالة كما هي بعد الاستبدال (بدون معالجة إضافية)
-                            # لأن الاستبدال تم بالفعل في المصدر
-                            send_file_kwargs['caption'] = caption
+                            # CRITICAL: Clean caption from markdown symbols when entities are present
+                            # Apply same logic as text messages to prevent formatting conflicts
+                            cleaned_caption = self._clean_text_for_entities(caption, message.entities)
+                            
+                            send_file_kwargs['caption'] = cleaned_caption
                             send_file_kwargs['formatting_entities'] = message.entities or []
                             
-                            logger.info(f"Using caption as-is after replacement: '{caption}'")
+                            logger.info(f"Using cleaned caption: '{cleaned_caption}'")
                             logger.info(f"Using entities as-is: {len(message.entities or [])} entities")
                         else:
                             logger.info("Sending media without caption")
@@ -771,15 +773,18 @@ class TelegramEmojiBot:
                             try:
                                 logger.info("Fallback 1: Trying with original entities only")
                                 
+                                # CRITICAL: Clean caption from markdown symbols
+                                cleaned_caption = self._clean_text_for_entities(caption, message.entities)
+                                
                                 await self.client.send_file(
                                     entity=target_channel_id,
                                     file=message.media,
-                                    caption=caption,
+                                    caption=cleaned_caption,
                                     formatting_entities=message.entities,
                                     supports_streaming=True,
                                     force_document=False
                                 )
-                                logger.info("Fallback 1 successful: media sent with original caption entities")
+                                logger.info("Fallback 1 successful: media sent with cleaned caption entities")
                                 
                             except Exception as fallback1_error:
                                 logger.warning(f"Fallback 1 failed: {fallback1_error}")
@@ -801,25 +806,29 @@ class TelegramEmojiBot:
                                             await asyncio.sleep(0.5)  # Small delay
                                             logger.info("Sending formatted caption as separate message using entity merging")
                                             
-                                            # Send caption with original entities - no additional processing needed
+                                            # CRITICAL: Clean caption from markdown symbols before sending as separate message
+                                            cleaned_caption = self._clean_text_for_entities(caption, message.entities)
+                                            
                                             await self.client.send_message(
                                                 entity=target_channel_id,
-                                                message=caption,
+                                                message=cleaned_caption,
                                                 formatting_entities=message.entities,
                                                 parse_mode=None,  # CRITICAL: Prevent markdown conflicts
                                                 link_preview=False
                                             )
-                                            logger.info(f"Caption sent as separate message with {len(message.entities or [])} original entities")
+                                            logger.info(f"Cleaned caption sent as separate message with {len(message.entities or [])} original entities")
                                         except Exception as caption_error:
                                             logger.error(f"Failed to send formatted caption as separate message: {caption_error}")
                                             # Final fallback: send plain caption
                                             try:
+                                                # Even for plain caption, clean markdown symbols
+                                                cleaned_caption = self._clean_text_for_entities(caption, message.entities)
                                                 await self.client.send_message(
                                                     entity=target_channel_id,
-                                                    message=caption,
+                                                    message=cleaned_caption,
                                                     parse_mode=None
                                                 )
-                                                logger.info("Plain caption sent as fallback")
+                                                logger.info("Plain cleaned caption sent as fallback")
                                             except Exception as plain_error:
                                                 logger.error(f"Failed to send even plain caption: {plain_error}")
                                     
