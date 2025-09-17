@@ -1709,10 +1709,10 @@ class TelegramEmojiBot:
             nonlocal emoji_processed_in_formatting
             code_content = match.group(1)
             if emoji in code_content:
-                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - converting to plain text")
-                # Convert to plain text and replace emoji
+                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - removing code formatting and replacing emoji")
+                # Remove code formatting and replace emoji with premium version
                 plain_result = code_content.replace(emoji, replacement)
-                logger.info(f"Code block converted to plain text: '{plain_result}'")
+                logger.info(f"Code block processed - removed `` and replaced emoji: '{plain_result}'")
                 emoji_processed_in_formatting = True
                 return plain_result
             # Keep original if no target emoji
@@ -1725,10 +1725,10 @@ class TelegramEmojiBot:
         # Handle malformed code blocks (single backticks that don't form proper blocks)
         # This removes stray backticks that might interfere with markdown parsing
         if '`' in text and not re.search(r'`[^`]*`', text):
-            logger.info(f"Found stray backticks in text, cleaning them up")
+            logger.info(f"Found stray backticks in text, removing them")
             # Remove single backticks that don't form proper code blocks
             text = text.replace('`', '')
-            logger.info(f"After cleaning stray backticks: '{text}'")
+            logger.info(f"After removing stray backticks: '{text}'")
         
         # Second pass: handle markdown links with emojis
         def handle_links(match):
@@ -1762,7 +1762,7 @@ class TelegramEmojiBot:
                 text = re.sub(escaped_emoji, replacement, text)
                 logger.info(f"Replaced {original_count} remaining '{emoji}' with '{replacement}' in normal text")
         else:
-            logger.info(f"Emoji '{emoji}' was already processed in formatting, skipping normal text replacement")
+            logger.info(f"Emoji '{emoji}' was already processed in code formatting - code marks removed and emoji replaced")
         
         # Clean up excessive whitespace
         text = re.sub(r'\s+', ' ', text).strip()
