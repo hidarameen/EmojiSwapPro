@@ -5396,7 +5396,7 @@ class TelegramEmojiBot:
             try:
                 start_method = getattr(self.client, 'start', None)
                 if start_method and callable(start_method):
-                    await start_method()
+                    await start_method(bot_token=BOT_TOKEN)
             except Exception as e:
                 logger.error(f"Failed to start Telegram client: {e}")
                 raise
@@ -5466,15 +5466,23 @@ async def main():
     """Main function to run the bot"""
     bot = TelegramEmojiBot()
     
+    BOT_TOKEN = os.getenv("BOT_TOKEN")  # تأكد من ضبطه في Northflank Env Vars
+
+async def main():
     try:
-        await bot.start()
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+        # Start Telegram bot using bot token to avoid input()
+        await bot.start(bot_token=BOT_TOKEN)
+        logger.info("Bot started successfully")
+        
+        # Run until disconnected
+        await bot.run_until_disconnected()
+        
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
         raise
     finally:
         await bot.stop()
+        logger.info("Bot stopped")
 
 if __name__ == "__main__":
     asyncio.run(main())
