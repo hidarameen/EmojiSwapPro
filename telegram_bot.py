@@ -126,9 +126,6 @@ class TelegramEmojiBot:
             self.db_pool = await asyncpg.create_pool(self.database_url, min_size=1, max_size=10)
             logger.info("Database connection pool initialized successfully")
             
-            # Create all required tables
-            await self.create_database_tables()
-            
             # Load cached data
             await self.load_emoji_mappings()
             await self.load_channel_emoji_mappings()
@@ -138,85 +135,6 @@ class TelegramEmojiBot:
             
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
-            raise
-
-    async def create_database_tables(self):
-        """Create all required database tables"""
-        if self.db_pool is None:
-            logger.error("Database pool not initialized")
-            return
-        try:
-            async with self.db_pool.acquire() as conn:
-                # جدول command_queue محذوف من UserBot المستقل
-                # هذا الجدول مخصص فقط للتواصل مع Control Bot
-                
-                # Emoji replacements table
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS emoji_replacements (
-                        id SERIAL PRIMARY KEY,
-                        normal_emoji TEXT UNIQUE NOT NULL,
-                        premium_emoji_id BIGINT NOT NULL,
-                        description TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                
-                # Monitored channels table
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS monitored_channels (
-                        id SERIAL PRIMARY KEY,
-                        channel_id BIGINT UNIQUE NOT NULL,
-                        channel_username TEXT,
-                        channel_title TEXT,
-                        is_active BOOLEAN DEFAULT TRUE,
-                        replacement_active BOOLEAN DEFAULT TRUE,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                
-                # Channel emoji replacements table
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS channel_emoji_replacements (
-                        id SERIAL PRIMARY KEY,
-                        channel_id BIGINT NOT NULL,
-                        normal_emoji TEXT NOT NULL,
-                        premium_emoji_id BIGINT NOT NULL,
-                        description TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(channel_id, normal_emoji)
-                    )
-                """)
-                
-                # Forwarding tasks table
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS forwarding_tasks (
-                        id SERIAL PRIMARY KEY,
-                        source_channel_id BIGINT NOT NULL,
-                        target_channel_id BIGINT NOT NULL,
-                        is_active BOOLEAN DEFAULT TRUE,
-                        description TEXT,
-                        delay_seconds INTEGER DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(source_channel_id, target_channel_id)
-                    )
-                """)
-                
-                # Bot admins table
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS bot_admins (
-                        id SERIAL PRIMARY KEY,
-                        user_id BIGINT UNIQUE NOT NULL,
-                        username TEXT,
-                        added_by BIGINT,
-                        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        is_active BOOLEAN DEFAULT TRUE
-                    )
-                """)
-                
-                logger.info("All database tables created successfully")
-                
-        except Exception as e:
-            logger.error(f"Failed to create database tables: {e}")
             raise
 
     async def load_emoji_mappings(self):
@@ -460,85 +378,6 @@ class TelegramEmojiBot:
             logger.error(f"Failed to deactivate forwarding task: {e}")
             return False
 
-    async def get_updated_message_after_replacement(self, event):
-        """
-        الحصول على الرسالة المحدثة بعد تطبيق الاستبدال مع الحفاظ على جميع التنسيقات
-        """
-        try:
-            # انتظار قصير للتأكد من انتهاء عملية التحديث
-            await asyncio.sleep(0.3)
-            
-            # محاولة الحصول على النسخة المحدثة من الرسالة
-            for attempt in range(5):  # زيادة عدد المحاولات
-                try:
-                    # الحصول على الرسالة المحدثة من الخادم
-                    updated_message = await self.client.get_messages(
-                        event.chat, 
-                        ids=event.message.id
-                    )
-                    
-                    if isinstance(updated_message, list) and len(updated_message) > 0:
-                        updated_message = updated_message[0]
-                    
-                    if updated_message is None:
-                        logger.warning(f"Could not retrieve message {event.message.id}, attempt {attempt + 1}")
-                        if attempt < 4:
-                            await asyncio.sleep(0.2)
-                            continue
-                        else:
-                            return event.message
-                    
-                    # فحص ما إذا كانت الرسالة تحتوي على إيموجي مميز (دليل على نجاح الاستبدال)
-                    has_premium_emojis = False
-                    if updated_message.entities:
-                        has_premium_emojis = any(
-                            isinstance(entity, MessageEntityCustomEmoji) 
-                            for entity in updated_message.entities
-                        )
-                    
-                    # فحص ما إذا كان النص يحتوي على markdown للإيموجي المميز
-                    updated_text = updated_message.text or updated_message.message or ""
-                    has_premium_markdown = "[" in updated_text and "](emoji/" in updated_text
-                    
-                    # إذا وُجدت علامات الاستبدال، استخدم الرسالة المحدثة
-                    if has_premium_emojis or has_premium_markdown:
-                        logger.info(f"Successfully retrieved updated message with emoji replacements for forwarding")
-                        logger.info(f"Message has {len(updated_message.entities or [])} entities")
-                        if updated_message.entities:
-                            premium_count = sum(1 for e in updated_message.entities if isinstance(e, MessageEntityCustomEmoji))
-                            logger.info(f"Message contains {premium_count} premium emojis")
-                        return updated_message
-                    
-                    # إذا لم توجد علامات الاستبدال ولكن المحتوى تغير، استخدم المحدث
-                    original_text = event.message.text or event.message.message or ""
-                    if updated_text != original_text:
-                        logger.info(f"Message text changed, using updated version for forwarding")
-                        return updated_message
-                    
-                    # إذا لم تحدث تغييرات واضحة، انتظر أكثر
-                    if attempt < 4:
-                        logger.debug(f"No obvious changes detected in attempt {attempt + 1}, waiting...")
-                        await asyncio.sleep(0.3)
-                        continue
-                    else:
-                        logger.info(f"Using original message after {attempt + 1} attempts")
-                        return event.message
-                        
-                except Exception as fetch_error:
-                    logger.warning(f"Error fetching updated message, attempt {attempt + 1}: {fetch_error}")
-                    if attempt < 4:
-                        await asyncio.sleep(0.2)
-                        continue
-                    else:
-                        logger.info("Using original message due to fetch errors")
-                        return event.message
-            
-            return event.message
-            
-        except Exception as e:
-            logger.error(f"Error getting updated message: {e}")
-            return event.message
-
     async def forward_message_to_targets(self, source_channel_id: int, message):
         """Copy message content to all target channels for this source"""
         try:
@@ -582,287 +421,9 @@ class TelegramEmojiBot:
         except Exception as e:
             logger.error(f"Failed to perform delayed copy from {source_channel_id} to {target_channel_id}: {e}")
 
-    def _clean_text_for_entities(self, text_content: str, message_entities: list) -> str:
-        """
-        Clean text from markdown symbols when entities are present to prevent double formatting.
-        This fixes the issue where **text** appears with bold entities, causing ****text**** display.
-        """
-        if not text_content or not message_entities:
-            return text_content
-        
-        # Clean text by removing markdown symbols that have corresponding entities
-        cleaned_text = text_content
-        
-        # Create a list to track processed character positions
-        entities_by_type = {}
-        for entity in message_entities:
-            entity_type = type(entity).__name__
-            if entity_type not in entities_by_type:
-                entities_by_type[entity_type] = []
-            entities_by_type[entity_type].append(entity)
-        
-        # Remove ** for MessageEntityBold
-        if 'MessageEntityBold' in entities_by_type:
-            logger.info("Found bold entities, removing ** symbols")
-            import re
-            original_cleaned = cleaned_text
-            
-            # Strategy: Remove all ** sequences completely since we have entities
-            # This handles cases like ****text****, **text1****text2**, etc.
-            bold_entities = entities_by_type['MessageEntityBold']
-            logger.info(f"Processing {len(bold_entities)} bold entities")
-            
-            # Remove all ** sequences (2 or more asterisks together)
-            # This handles **, ***, ****, etc. - aggressive cleanup for accumulated symbols
-            cleaned_text = re.sub(r'\*{2,}', '', cleaned_text)
-            
-            # Additional cleanup: remove any remaining single asterisks that are leftover formatting
-            cleaned_text = re.sub(r'(?<!\w)\*(?!\w)|(?<!\w)\*(?=\s)|(?<=\s)\*(?!\w)', '', cleaned_text)
-            
-            if cleaned_text != original_cleaned:
-                logger.info(f"Removed all ** sequences and cleanup: '{original_cleaned}' -> '{cleaned_text}'")
-            
-        # Remove __ for MessageEntityItalic  
-        if 'MessageEntityItalic' in entities_by_type:
-            logger.info("Found italic entities, removing __ symbols")
-            import re
-            original_cleaned = cleaned_text
-            
-            italic_entities = entities_by_type['MessageEntityItalic']
-            logger.info(f"Processing {len(italic_entities)} italic entities")
-            
-            # Remove all __ sequences (2 or more underscores together) - handles __, ___, ____, etc.
-            cleaned_text = re.sub(r'_{2,}', '', cleaned_text)
-            
-            # Additional cleanup: remove any remaining single underscores that are leftover formatting
-            cleaned_text = re.sub(r'(?<!\w)_(?!\w)|(?<!\w)_(?=\s)|(?<=\s)_(?!\w)', '', cleaned_text)
-            
-            if cleaned_text != original_cleaned:
-                logger.info(f"Removed all __ sequences and cleanup: '{original_cleaned}' -> '{cleaned_text}'")
-        
-        # Remove ~~ for MessageEntityStrikethrough
-        if 'MessageEntityStrikethrough' in entities_by_type:
-            logger.info("Found strikethrough entities, removing ~~ symbols")
-            import re
-            original_cleaned = cleaned_text
-            
-            strikethrough_entities = entities_by_type['MessageEntityStrikethrough']
-            logger.info(f"Processing {len(strikethrough_entities)} strikethrough entities")
-            
-            # Remove all sequences of tildes (2 or more) - this handles ~~, ~~~, ~~~~, etc.
-            # Use a more aggressive approach to clean up accumulated tildes
-            cleaned_text = re.sub(r'~{2,}', '', cleaned_text)
-            
-            # Additional cleanup: remove any remaining single tildes that might be left over
-            # But be careful not to remove tildes that are not part of formatting
-            # Look for patterns like single ~ at start/end of words which could be leftover formatting
-            cleaned_text = re.sub(r'(?<!\w)~(?!\w)|(?<!\w)~(?=\s)|(?<=\s)~(?!\w)', '', cleaned_text)
-            
-            if cleaned_text != original_cleaned:
-                logger.info(f"Removed all ~~ sequences and cleanup: '{original_cleaned}' -> '{cleaned_text}'")
-        
-        # Remove ` for MessageEntityCode (single backticks)
-        if 'MessageEntityCode' in entities_by_type:
-            logger.info("Found code entities, removing ` symbols")
-            import re
-            original_cleaned = cleaned_text
-            
-            code_entities = entities_by_type['MessageEntityCode']
-            logger.info(f"Processing {len(code_entities)} code entities")
-            
-            # Remove single backticks
-            cleaned_text = cleaned_text.replace('`', '')
-            
-            if cleaned_text != original_cleaned:
-                logger.info(f"Removed ` symbols: '{original_cleaned}' -> '{cleaned_text}'")
-        
-        # Remove || for MessageEntitySpoiler (hidden text)
-        if 'MessageEntitySpoiler' in entities_by_type:
-            logger.info("Found spoiler entities, removing || symbols")
-            import re
-            original_cleaned = cleaned_text
-            
-            spoiler_entities = entities_by_type['MessageEntitySpoiler']
-            logger.info(f"Processing {len(spoiler_entities)} spoiler entities")
-            
-            # Remove all || sequences (2 or more pipes together)
-            cleaned_text = re.sub(r'\|{2,}', '', cleaned_text)
-            
-            if cleaned_text != original_cleaned:
-                logger.info(f"Removed all || sequences: '{original_cleaned}' -> '{cleaned_text}'")
-        
-        # Remove ``` for MessageEntityPre (code blocks)
-        if 'MessageEntityPre' in entities_by_type:
-            logger.info("Found pre/code block entities, removing ``` symbols")
-            import re
-            original_cleaned = cleaned_text
-            
-            pre_entities = entities_by_type['MessageEntityPre']
-            logger.info(f"Processing {len(pre_entities)} pre entities")
-            
-            # Remove triple backticks
-            cleaned_text = re.sub(r'```[a-zA-Z]*\n?', '', cleaned_text)  # Remove ```lang
-            cleaned_text = cleaned_text.replace('```', '')  # Remove closing ```
-            
-            if cleaned_text != original_cleaned:
-                logger.info(f"Removed ``` sequences: '{original_cleaned}' -> '{cleaned_text}'")
-        
-        # Remove > for MessageEntityBlockQuote (quotes)
-        if 'MessageEntityBlockQuote' in entities_by_type:
-            logger.info("Found blockquote entities, removing > symbols")
-            import re
-            original_cleaned = cleaned_text
-            
-            quote_entities = entities_by_type['MessageEntityBlockQuote']
-            logger.info(f"Processing {len(quote_entities)} blockquote entities")
-            
-            # Remove > at the beginning of lines
-            lines = cleaned_text.split('\n')
-            cleaned_lines = []
-            for line in lines:
-                if line.lstrip().startswith('> '):
-                    cleaned_lines.append(line.lstrip()[2:])  # Remove "> "
-                elif line.lstrip().startswith('>'):
-                    cleaned_lines.append(line.lstrip()[1:])   # Remove ">"
-                else:
-                    cleaned_lines.append(line)
-            cleaned_text = '\n'.join(cleaned_lines)
-            
-            if cleaned_text != original_cleaned:
-                logger.info(f"Removed > sequences: '{original_cleaned}' -> '{cleaned_text}'")
-        
-        # Remove [text](url) for MessageEntityTextUrl (hidden links)
-        if 'MessageEntityTextUrl' in entities_by_type:
-            logger.info("Found text URL entities, removing [text](url) markdown format")
-            import re
-            original_cleaned = cleaned_text
-            
-            url_entities = entities_by_type['MessageEntityTextUrl']
-            logger.info(f"Processing {len(url_entities)} text URL entities")
-            
-            # Find and remove markdown link format [text](url)
-            # This pattern matches [any text](any url)
-            link_pattern = r'\[([^\]]*)\]\(([^)]*)\)'
-            matches = list(re.finditer(link_pattern, cleaned_text))
-            
-            if matches:
-                # Process matches in reverse order to maintain positions
-                for match in reversed(matches):
-                    link_text = match.group(1)  # text inside []
-                    link_url = match.group(2)   # url inside ()
-                    
-                    # Replace the full markdown link with just the text
-                    # The entity will handle the URL functionality
-                    cleaned_text = cleaned_text[:match.start()] + link_text + cleaned_text[match.end():]
-                    logger.info(f"Removed markdown link format: '[{link_text}]({link_url})' -> '{link_text}'")
-                    
-            if cleaned_text != original_cleaned:
-                logger.info(f"Removed [text](url) sequences: '{original_cleaned}' -> '{cleaned_text}'")
-        
-        # Final comprehensive cleanup: Remove any remaining accumulated markdown symbols
-        # This catches symbols that might not have been caught by entity-specific cleaning
-        import re
-        pre_final_cleanup = cleaned_text
-        logger.info(f"Starting final comprehensive cleanup for: '{pre_final_cleanup}'")
-        
-        # Aggressive cleanup for any remaining accumulated symbols
-        # Remove sequences of 3+ symbols that are commonly accumulated
-        cleaned_text = re.sub(r'\*{3,}', '', cleaned_text)  # Remove ***+
-        cleaned_text = re.sub(r'_{3,}', '', cleaned_text)   # Remove ___+
-        cleaned_text = re.sub(r'~{3,}', '', cleaned_text)   # Remove ~~~+
-        cleaned_text = re.sub(r'\|{3,}', '', cleaned_text)  # Remove |||+
-        
-        # Also clean up double symbols that might have been missed
-        cleaned_text = re.sub(r'\*{2}', '', cleaned_text)   # Remove **
-        cleaned_text = re.sub(r'_{2}', '', cleaned_text)    # Remove __
-        cleaned_text = re.sub(r'~{2}', '', cleaned_text)    # Remove ~~
-        cleaned_text = re.sub(r'\|{2}', '', cleaned_text)   # Remove ||
-        
-        logger.info(f"After comprehensive cleanup: '{cleaned_text}'")
-        if cleaned_text != pre_final_cleanup:
-            logger.info(f"✅ Final comprehensive cleanup applied: '{pre_final_cleanup}' -> '{cleaned_text}'")
-        
-        # Handle other entity types that might have markdown symbols
-        # MessageEntityUnderline - no specific markdown symbol, handled by entities
-        # MessageEntityCustomEmoji - no markdown symbols to clean
-        
-        if cleaned_text != text_content:
-            logger.info(f"Text cleaned from markdown symbols: '{text_content}' -> '{cleaned_text}'")
-        
-        return cleaned_text
-
-    def _merge_entities_with_formatting(self, text_content: str, message_entities: list) -> Tuple[str, list]:
-        """
-        Helper function to preserve entities and formatting without conflicts.
-        CRITICAL: Never mix markdown parsing with existing entities to prevent formatting corruption.
-        Used by both text messages and media captions for consistent behavior.
-        PRESERVES ALL original text structure including line breaks and spacing.
-        """
-        # If no text content, return empty
-        if not text_content:
-            return text_content, message_entities or []
-        
-        # Always preserve original entities, especially custom emojis
-        original_entities = message_entities or []
-        
-        # GUARD: If original message_entities exist (formatting already defined), 
-        # return immediately without markdown parsing to prevent conflicts
-        if original_entities:
-            logger.info(f"Preserving {len(original_entities)} original entities without markdown parsing")
-            return text_content, original_entities
-        
-        # Check if the text contains markdown-style formatting (like **text**)
-        # Only for messages that have NO existing entities
-        needs_markdown_parse = False
-        if ('**' in text_content or '__' in text_content or 
-            '~~' in text_content or '`' in text_content):
-            needs_markdown_parse = True
-        
-        # Skip markdown links like [emoji](emoji/123) as they indicate premium emoji replacement
-        # These should NOT be parsed as markdown links
-        if '[' in text_content and '](' in text_content and 'emoji/' in text_content:
-            logger.info("Text contains premium emoji markdown links - skipping markdown parsing")
-            return text_content, []
-        
-        # Only parse markdown for messages without any existing entities
-        if needs_markdown_parse:
-            try:
-                parsed_text, parsed_entities = self.parse_mode.parse(text_content)
-                
-                # Check if parsing preserved the structure
-                if parsed_text != text_content:
-                    logger.warning(f"Markdown parsing changed text structure - preserving original")
-                    return text_content, []
-                
-                logger.info(f"Parsed markdown for text without existing entities: {len(parsed_entities)} entities found")
-                return parsed_text, parsed_entities
-            except Exception as parse_error:
-                logger.warning(f"Failed to parse markdown, using original text: {parse_error}")
-                return text_content, []
-        else:
-            # No markdown parsing needed, preserve text exactly as-is
-            logger.info(f"No markdown parsing needed, preserving original text structure")
-            return text_content, []
-
     async def _copy_message_to_target(self, source_channel_id: int, target_channel_id: int, message):
-        """Copy message content to target channel with full formatting preservation after emoji replacement"""
+        """Copy message content to target channel with full formatting preservation"""
         try:
-            # تحقق من حالة الاستبدال للقناة المصدر
-            replacement_enabled = self.channel_replacement_status.get(source_channel_id, True)
-            
-            logger.info(f"Copying message from {source_channel_id} to {target_channel_id}")
-            logger.info(f"Replacement status for source channel: {'enabled' if replacement_enabled else 'disabled'}")
-            
-            # عرض تفاصيل الرسالة الحالية
-            current_text = message.text or message.message or ""
-            if current_text:
-                logger.info(f"Message text: '{current_text[:100]}{'...' if len(current_text) > 100 else ''}'")
-            
-            if message.entities:
-                premium_emoji_count = sum(1 for e in message.entities if isinstance(e, MessageEntityCustomEmoji))
-                total_entities = len(message.entities)
-                logger.info(f"Message entities: {total_entities} total, {premium_emoji_count} premium emojis")
-            
             # Check media messages first (including those with captions)
             # This ensures media with captions are handled as media, not text
             if message.media:
@@ -887,55 +448,47 @@ class TelegramEmojiBot:
                             'file': message.media,
                             'supports_streaming': True,
                             'force_document': False,  # Keep original media type
-                            'parse_mode': None  # Use raw entities - this is crucial!
+                            'parse_mode': None  # Use raw entities
                         }
                         
                         # Add caption and entities if they exist
                         if caption:
-                            logger.info(f"Processing media caption: '{caption}'")
-                            logger.info(f"Caption entities: {len(message.entities or [])} entities")
+                            send_file_kwargs['caption'] = caption
                             
-                            # CRITICAL: Clean caption from markdown symbols when entities are present
-                            # Apply same logic as text messages to prevent formatting conflicts
-                            cleaned_caption = self._clean_text_for_entities(caption, message.entities)
+                            # Preserve all caption entities exactly as they are
+                            if message.entities:
+                                logger.info(f"Preserving {len(message.entities)} caption formatting entities")
+                                send_file_kwargs['formatting_entities'] = message.entities
                             
-                            send_file_kwargs['caption'] = cleaned_caption
-                            send_file_kwargs['formatting_entities'] = message.entities or []
-                            
-                            logger.info(f"Using cleaned caption: '{cleaned_caption}'")
-                            logger.info(f"Using entities as-is: {len(message.entities or [])} entities")
+                            logger.info(f"Sending media with caption: '{caption[:50]}{'...' if len(caption) > 50 else ''}'")
                         else:
                             logger.info("Sending media without caption")
                         
                         # Send the file with all parameters
                         await self.client.send_file(**send_file_kwargs)
-                        logger.info("Successfully sent media with preserved caption formatting and entities")
+                        logger.info("Successfully sent media with preserved caption and formatting")
                         
                     except Exception as primary_error:
                         logger.warning(f"Primary send_file method failed: {primary_error}")
                         
-                        # Fallback 1: Try with original entities only
+                        # Fallback 1: Try without entities but keep caption
                         if caption:
                             try:
-                                logger.info("Fallback 1: Trying with original entities only")
-                                
-                                # CRITICAL: Clean caption from markdown symbols
-                                cleaned_caption = self._clean_text_for_entities(caption, message.entities)
-                                
+                                logger.info("Fallback: Sending media with caption but without entities")
                                 await self.client.send_file(
                                     entity=target_channel_id,
                                     file=message.media,
-                                    caption=cleaned_caption,
-                                    formatting_entities=message.entities,
+                                    caption=caption,
                                     supports_streaming=True,
-                                    force_document=False
+                                    force_document=False,
+                                    parse_mode=None
                                 )
-                                logger.info("Fallback 1 successful: media sent with cleaned caption entities")
+                                logger.info("Fallback 1 successful: media sent with caption (no entities)")
                                 
                             except Exception as fallback1_error:
                                 logger.warning(f"Fallback 1 failed: {fallback1_error}")
                                 
-                                # Fallback 2: Try without caption, then send caption separately
+                                # Fallback 2: Try without caption
                                 try:
                                     logger.info("Fallback 2: Sending media without caption")
                                     await self.client.send_file(
@@ -946,37 +499,26 @@ class TelegramEmojiBot:
                                     )
                                     logger.info("Fallback 2 successful: media sent without caption")
                                     
-                                    # Send caption as separate message with full formatting preservation
+                                    # If media was sent successfully but without caption, send caption as separate message
                                     if caption:
                                         try:
                                             await asyncio.sleep(0.5)  # Small delay
-                                            logger.info("Sending formatted caption as separate message using entity merging")
-                                            
-                                            # CRITICAL: Clean caption from markdown symbols before sending as separate message
-                                            cleaned_caption = self._clean_text_for_entities(caption, message.entities)
-                                            
-                                            await self.client.send_message(
-                                                entity=target_channel_id,
-                                                message=cleaned_caption,
-                                                formatting_entities=message.entities,
-                                                parse_mode=None,  # CRITICAL: Prevent markdown conflicts
-                                                link_preview=False
-                                            )
-                                            logger.info(f"Cleaned caption sent as separate message with {len(message.entities or [])} original entities")
-                                        except Exception as caption_error:
-                                            logger.error(f"Failed to send formatted caption as separate message: {caption_error}")
-                                            # Final fallback: send plain caption
-                                            try:
-                                                # Even for plain caption, clean markdown symbols
-                                                cleaned_caption = self._clean_text_for_entities(caption, message.entities)
+                                            logger.info("Sending caption as separate message")
+                                            if message.entities:
                                                 await self.client.send_message(
                                                     entity=target_channel_id,
-                                                    message=cleaned_caption,
+                                                    message=caption,
+                                                    formatting_entities=message.entities,
                                                     parse_mode=None
                                                 )
-                                                logger.info("Plain cleaned caption sent as fallback")
-                                            except Exception as plain_error:
-                                                logger.error(f"Failed to send even plain caption: {plain_error}")
+                                            else:
+                                                await self.client.send_message(
+                                                    entity=target_channel_id,
+                                                    message=caption
+                                                )
+                                            logger.info("Caption sent as separate message")
+                                        except Exception as caption_error:
+                                            logger.error(f"Failed to send caption as separate message: {caption_error}")
                                     
                                 except Exception as fallback2_error:
                                     logger.error(f"All media sending methods failed: {fallback2_error}")
@@ -989,8 +531,7 @@ class TelegramEmojiBot:
                                     entity=target_channel_id,
                                     file=message.media,
                                     supports_streaming=True,
-                                    force_document=False,
-                                    parse_mode=None
+                                    force_document=False
                                 )
                                 logger.info("Media sent successfully without caption")
                             except Exception as no_caption_error:
@@ -1027,77 +568,115 @@ class TelegramEmojiBot:
                         return
                             
             elif message.text or message.message:
-                # Pure text message (no media) - preserve ALL formatting entities after replacement
+                # Pure text message (no media) - preserve ALL formatting entities including:
+                # - Bold, Italic, Underline, Strikethrough
+                # - Code, Pre (code blocks)
+                # - Links, Mentions
+                # - Custom emojis
+                # - Spoilers
+                # - And all other Telegram formatting
                 text_content = message.text or message.message
                 
-                logger.info(f"Copying text message: '{text_content[:100]}{'...' if len(text_content) > 100 else ''}'")
+                # Check if the text contains markdown-style formatting (like **text**)
+                # that needs to be converted to proper Telegram entities
+                needs_markdown_parse = False
+                if ('**' in text_content or '__' in text_content or 
+                    '~~' in text_content or '`' in text_content or
+                    '[' in text_content and '](' in text_content):
+                    needs_markdown_parse = True
                 
-                # Log the entities being preserved for debugging
+                # Preserve all entities exactly as they are to maintain complete formatting
                 if message.entities:
-                    premium_emoji_count = sum(1 for e in message.entities if isinstance(e, MessageEntityCustomEmoji))
-                    other_entities = len(message.entities) - premium_emoji_count
-                    
-                    logger.info(f"Text message entities: {len(message.entities)} total")
-                    logger.info(f"  - Premium emojis: {premium_emoji_count}")
-                    logger.info(f"  - Other formatting: {other_entities}")
-                    
-                    # تفاصيل الإيموجي المميز للتأكد من نجاح الاستبدال
+                    # Log the entities being preserved for debugging
+                    logger.info(f"Preserving {len(message.entities)} formatting entities for copying")
+                    premium_emoji_count = 0
                     for entity in message.entities:
+                        entity_type = type(entity).__name__
                         if isinstance(entity, MessageEntityCustomEmoji):
-                            logger.info(f"  - Premium Emoji ID {entity.document_id} at position {entity.offset}-{entity.offset + entity.length}")
-                
-                # CRITICAL: Clean text from markdown symbols when entities are present
-                cleaned_text = self._clean_text_for_entities(text_content, message.entities)
-                
-                try:
-                    await self.client.send_message(
-                        entity=target_channel_id,
-                        message=cleaned_text,
-                        formatting_entities=message.entities,
-                        link_preview=False,
-                        parse_mode=None  # استخدام الكيانات مباشرة
-                    )
-                    logger.info(f"Successfully sent text message with {len(message.entities or [])} entities preserved")
-                except Exception as text_error:
-                    logger.warning(f"Failed to send text with entities, trying alternative approach: {text_error}")
+                            premium_emoji_count += 1
+                            logger.info(f"  - Premium Emoji: {entity_type} at offset {entity.offset}, length {entity.length}, ID: {entity.document_id}")
+                        else:
+                            logger.debug(f"  - {entity_type} at offset {entity.offset}, length {entity.length}")
                     
-                    # محاولة بديلة: إرسال النص مع كيانات التنسيق فقط
-                    try:
-                        # فصل الإيموجي المميز عن باقي التنسيقات
-                        premium_emojis = [e for e in (message.entities or []) if isinstance(e, MessageEntityCustomEmoji)]
-                        other_entities = [e for e in (message.entities or []) if not isinstance(e, MessageEntityCustomEmoji)]
-                        
-                        if premium_emojis:
-                            # إرسال مع جميع الكيانات بما في ذلك الإيموجي المميز
+                    logger.info(f"Copying message with {premium_emoji_count} premium emojis and {len(message.entities) - premium_emoji_count} other formatting entities")
+                    
+                    # If the text still contains markdown syntax, parse it to get proper entities
+                    if needs_markdown_parse:
+                        try:
+                            # Parse the text with markdown to get proper formatting entities
+                            parsed_text, parsed_entities = self.parse_mode.parse(text_content)
+                            
+                            # Merge existing custom emoji entities with new formatting entities
+                            final_entities = []
+                            
+                            # Add custom emoji entities from the original message
+                            for entity in message.entities:
+                                if isinstance(entity, MessageEntityCustomEmoji):
+                                    final_entities.append(entity)
+                            
+                            # Add formatting entities from markdown parsing (but skip custom emojis to avoid duplicates)
+                            for entity in parsed_entities:
+                                if not isinstance(entity, MessageEntityCustomEmoji):
+                                    final_entities.append(entity)
+                            
+                            # Sort entities by offset to maintain proper order
+                            final_entities.sort(key=lambda e: e.offset)
+                            
+                            logger.info(f"Parsed markdown and merged entities: {len(final_entities)} total entities")
+                            
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=parsed_text,
+                                formatting_entities=final_entities,
+                                parse_mode=None,
+                                link_preview=False
+                            )
+                        except Exception as parse_error:
+                            logger.warning(f"Failed to parse markdown in copied message, using original entities: {parse_error}")
+                            # Fallback to original method
                             await self.client.send_message(
                                 entity=target_channel_id,
                                 message=text_content,
                                 formatting_entities=message.entities,
-                                parse_mode=None,  # CRITICAL: Prevent conflicts
+                                parse_mode=None,
                                 link_preview=False
                             )
-                            logger.info(f"Successfully sent with all entities including {len(premium_emojis)} premium emojis")
-                        else:
-                            # إرسال مع التنسيقات الأخرى فقط
-                            await self.client.send_message(
-                                entity=target_channel_id,
-                                message=text_content,
-                                formatting_entities=other_entities,
-                                parse_mode=None,  # CRITICAL: Prevent conflicts
-                                link_preview=False
-                            )
-                            logger.info(f"Successfully sent with {len(other_entities)} non-premium entities")
-                        
-                    except Exception as fallback_error:
-                        logger.error(f"All text sending methods failed: {fallback_error}")
-                        # Final fallback: plain text
+                    else:
+                        # No markdown syntax detected, use entities as-is
                         await self.client.send_message(
                             entity=target_channel_id,
                             message=text_content,
+                            formatting_entities=message.entities,
                             parse_mode=None,
                             link_preview=False
                         )
-                        logger.info("Sent plain text as final fallback")
+                else:
+                    # No entities, but check if text has markdown that should be parsed
+                    if needs_markdown_parse:
+                        try:
+                            parsed_text, parsed_entities = self.parse_mode.parse(text_content)
+                            logger.info(f"Parsing markdown for text without entities: {len(parsed_entities)} entities found")
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=parsed_text,
+                                formatting_entities=parsed_entities,
+                                parse_mode=None
+                            )
+                        except Exception as parse_error:
+                            logger.warning(f"Failed to parse markdown, sending as plain text: {parse_error}")
+                            await self.client.send_message(
+                                entity=target_channel_id,
+                                message=text_content,
+                                parse_mode=None
+                            )
+                    else:
+                        # No entities and no markdown, send plain text
+                        logger.info("Copying plain text message (no formatting entities)")
+                        await self.client.send_message(
+                            entity=target_channel_id,
+                            message=text_content,
+                            parse_mode=None
+                        )
             else:
                 # Handle other message types like stickers, animations, etc.
                 # This case should be rare since most content is either media or text
@@ -1288,10 +867,66 @@ class TelegramEmojiBot:
             return f"❌ خطأ في عرض الصلاحيات: {e}"
 
     async def process_command_queue(self):
-        """معالجة طابور الأوامر - معطل في UserBot المستقل"""
-        # تم تعطيل هذه الوظيفة لأن UserBot يعمل بشكل مستقل الآن
-        # هذه الوظيفة مخصصة فقط للتواصل مع Control Bot
-        pass
+        """Process pending commands from control bot with enhanced error handling"""
+        if self.db_pool is None:
+            return
+        
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Get pending commands
+                commands = await conn.fetch(
+                    "SELECT * FROM command_queue WHERE status = 'pending' ORDER BY created_at LIMIT 10"
+                )
+                
+                for cmd_row in commands:
+                    command_id = None
+                    try:
+                        command_id = cmd_row['id']
+                        command = cmd_row['command']
+                        args = cmd_row['args'] or ""
+                        requested_by = cmd_row['requested_by']
+                        chat_id = cmd_row.get('chat_id')
+                        message_id = cmd_row.get('message_id')
+                        callback_data = cmd_row.get('callback_data')
+                        
+                        logger.info(f"Processing command queue ID {command_id}: {command} with args: {args}")
+                        
+                        # Mark as processing
+                        await conn.execute(
+                            "UPDATE command_queue SET status = 'processing' WHERE id = $1",
+                            command_id
+                        )
+                        
+                        # Execute command with enhanced handling
+                        result = await self.execute_queued_command(command, args, requested_by)
+                        
+                        # Clean up result for better display
+                        if result and len(result) > 3000:  # Truncate long results
+                            result = result[:2900] + "\n\n... (النتيجة مقطوعة للطول)"
+                        
+                        # Update with result
+                        await conn.execute(
+                            "UPDATE command_queue SET status = 'completed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
+                            result or "تم تنفيذ الأمر بنجاح", command_id
+                        )
+                        
+                        logger.info(f"Successfully processed command {command_id}")
+                        
+                    except Exception as cmd_error:
+                        error_msg = str(cmd_error)
+                        logger.error(f"Failed to process command {command_id}: {error_msg}")
+                        
+                        try:
+                            # Mark as failed with error details
+                            await conn.execute(
+                                "UPDATE command_queue SET status = 'failed', result = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2",
+                                f"خطأ في التنفيذ: {error_msg}", command_id
+                            )
+                        except Exception as update_error:
+                            logger.error(f"Failed to update command {command_id} status: {update_error}")
+                
+        except Exception as e:
+            logger.error(f"Failed to process command queue: {e}")
 
     async def execute_queued_command(self, command: str, args: str, requested_by: int) -> str:
         """Execute a queued command and return result with comprehensive command support"""
@@ -1496,9 +1131,14 @@ class TelegramEmojiBot:
             logger.error(f"Failed to send result to user {user_id}: {e}")
 
     async def start_command_queue_processor(self):
-        """معالج طابور الأوامر - معطل في UserBot المستقل"""
-        # هذه الوظيفة معطلة لأن UserBot يعمل بشكل مستقل
-        pass
+        """Start periodic command queue processing"""
+        while True:
+            try:
+                await self.process_command_queue()
+                await asyncio.sleep(5)  # Check every 5 seconds
+            except Exception as e:
+                logger.error(f"Command queue processor error: {e}")
+                await asyncio.sleep(10)  # Wait longer on error
 
     async def add_admin(self, user_id: int, username: str = None, added_by: int = None) -> bool:
         """Add admin to database and cache"""
@@ -1966,130 +1606,13 @@ class TelegramEmojiBot:
         logger.info(f"Final unique emojis/symbols: {unique_emojis}")
         return unique_emojis
 
-    def _smart_emoji_replacement(self, text: str, emoji: str, replacement: str) -> str:
-        """
-        Smart emoji replacement that:
-        1. Converts code blocks containing emojis to plain text (removes backticks but preserves content structure)
-        2. Converts hidden links containing emojis to plain text  
-        3. Replaces emojis with premium versions in other contexts
-        4. Handles malformed code blocks (single backticks)
-        5. PRESERVES ALL original line breaks and spacing structure
-        """
-        import re
-        
-        logger.info(f"Starting smart replacement for emoji '{emoji}' in text: '{text}'")
-        
-        # Pattern for proper code blocks (inline code within matching backticks)
-        code_pattern = r'`([^`]*)`'
-        
-        # Pattern for markdown links [text](url) - more precise
-        link_pattern = r'\[([^\]]*)\]\(([^\)]*)\)'
-        
-        # Track if emoji was found in special formatting
-        emoji_processed_in_formatting = False
-        original_text = text
-        
-        # First pass: handle proper code blocks with emojis
-        def handle_code_blocks(match):
-            nonlocal emoji_processed_in_formatting
-            code_content = match.group(1)
-            if emoji in code_content:
-                logger.info(f"Found emoji '{emoji}' in code block: `{code_content}` - removing code formatting but preserving content")
-                # حذف تنسيق الكود فقط مع الاحتفاظ بالمحتوى كما هو تماماً
-                emoji_processed_in_formatting = True
-                logger.info(f"Code block formatting removed, content preserved: '{code_content}'")
-                return code_content  # إرجاع المحتوى بدون backticks مع الاحتفاظ بالتنسيق الداخلي
-            # Keep original if no target emoji
-            return match.group(0)
-        
-        # Apply code block handling - this will remove backticks but preserve content structure
-        text = re.sub(code_pattern, handle_code_blocks, text)
-        logger.info(f"After code block processing: '{text}'")
-        
-        # Handle malformed code blocks (single backticks that don't form proper blocks)
-        # Only remove stray backticks, don't affect spacing
-        if '`' in text and not re.search(r'`[^`]*`', text):
-            logger.info(f"Found stray backticks in text, removing them")
-            # Remove single backticks that don't form proper code blocks
-            text = text.replace('`', '')
-            logger.info(f"After removing stray backticks: '{text}'")
-        
-        # Special handling: if we found emoji in code formatting, remove ALL remaining backticks
-        if emoji_processed_in_formatting and '`' in text:
-            logger.info(f"Emoji was found in code formatting - removing remaining backticks")
-            text = text.replace('`', '')
-            logger.info(f"After removing all backticks: '{text}'")
-        
-        # Second pass: handle markdown links with emojis
-        def handle_links(match):
-            nonlocal emoji_processed_in_formatting
-            link_text = match.group(1)
-            link_url = match.group(2)
-            
-            # Skip if this is already a premium emoji link we created
-            if link_url.startswith('emoji/'):
-                return match.group(0)
-            
-            if emoji in link_text:
-                logger.info(f"Found emoji '{emoji}' in link text: '[{link_text}]({link_url})' - converting to plain text")
-                # Convert to plain text and replace emoji - only keep the text part
-                plain_result = link_text.replace(emoji, replacement)
-                logger.info(f"Link converted to plain text: '{plain_result}'")
-                emoji_processed_in_formatting = True
-                return plain_result
-            # Keep original if no target emoji
-            return match.group(0)
-        
-        # Apply link handling
-        text = re.sub(link_pattern, handle_links, text)
-        logger.info(f"After link processing: '{text}'")
-        
-        # Third pass: replace any remaining emojis in normal text
-        escaped_emoji = re.escape(emoji)
-        original_count = len(re.findall(escaped_emoji, text))
-        if original_count > 0:
-            text = re.sub(escaped_emoji, replacement, text)
-            if emoji_processed_in_formatting:
-                logger.info(f"Replaced {original_count} '{emoji}' with '{replacement}' after removing special formatting")
-            else:
-                logger.info(f"Replaced {original_count} '{emoji}' with '{replacement}' in normal text")
-        
-        # CRITICAL FIX: Do NOT clean up, trim, or modify the text structure in any way
-        # PRESERVE EVERYTHING as is - spacing, line breaks, empty lines, etc.
-        # The only change should be emoji replacement and backtick removal
-        
-        # Check if the text actually changed after processing
-        if text == original_text:
-            logger.warning(f"Text unchanged after processing - this may cause Telegram edit errors")
-            # Force a minimal change only if we processed emoji in formatting
-            if emoji_processed_in_formatting:
-                logger.info("Adding minimal change marker to ensure successful edit")
-                # Add zero-width space at the end to ensure text is different
-                text = text + "\u200B"
-                logger.info(f"Added zero-width space for successful edit")
-        
-        if emoji_processed_in_formatting:
-            logger.info(f"✅ SUCCESSFULLY removed special formatting and replaced emoji: '{emoji}' -> '{replacement}'")
-        
-        logger.info(f"Final result after smart replacement: '{text}'")
-        return text
-
     async def replace_emojis_in_message(self, event):
         """Replace normal emojis with premium emojis in a message"""
         try:
             message = event.message
             original_text = message.text or message.message
             
-            # إضافة cache للرسائل المعالجة لتجنب التكرار
-            if not hasattr(self, '_processed_messages'):
-                self._processed_messages = set()
-            
-            message_key = f"{message.chat_id}_{message.id}"
-            if message_key in self._processed_messages:
-                logger.debug(f"Message {message.id} already processed, skipping")
-                return
-            
-            logger.info(f"Attempting to replace emojis in message {message.id}: '{original_text}'")
+            logger.info(f"Attempting to replace emojis in message: '{original_text}'")
             
             if not original_text:
                 logger.info("No text in message, skipping emoji replacement")
@@ -2101,15 +1624,6 @@ class TelegramEmojiBot:
                 (message.entities and any(hasattr(entity, 'document_id') for entity in message.entities))):
                 logger.info("Message already contains premium emojis or custom emoji entities, skipping replacement")
                 return
-            
-            # إضافة الرسالة إلى قائمة المعالجة
-            self._processed_messages.add(message_key)
-            
-            # تنظيف الـ cache كل فترة لتجنب تراكم الذاكرة
-            if len(self._processed_messages) > 1000:
-                # احتفظ بآخر 500 رسالة فقط
-                recent_messages = list(self._processed_messages)[-500:]
-                self._processed_messages = set(recent_messages)
             
             # Extract emojis from the message
             found_emojis = self.extract_emojis_from_text(original_text)
@@ -2156,18 +1670,18 @@ class TelegramEmojiBot:
             if not emojis_to_replace:
                 return
             
-            # Use smart replacement to avoid conflicts with code blocks and links
+            # Use regex to replace emojis one by one to avoid conflicts
             for normal_emoji, premium_emoji_id in emojis_to_replace.items():
-                # Count occurrences before replacement
+                # Escape special regex characters in emoji
                 escaped_emoji = re.escape(normal_emoji)
+                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_emoji_id})"
+                
+                # Count occurrences before replacement
                 occurrence_count = len(re.findall(escaped_emoji, modified_text))
                 logger.info(f"Replacing {occurrence_count} occurrences of {normal_emoji} with premium emoji ID {premium_emoji_id}")
                 
-                # Create premium emoji markdown - this will be the final replacement
-                premium_emoji_markdown = f"[{normal_emoji}](emoji/{premium_emoji_id})"
-                
-                # Smart replacement that extracts emojis from formatting and replaces with premium version
-                modified_text = self._smart_emoji_replacement(modified_text, normal_emoji, premium_emoji_markdown)
+                # Replace all occurrences of this specific emoji
+                modified_text = re.sub(escaped_emoji, premium_emoji_markdown, modified_text)
                 logger.info(f"Text after replacing {normal_emoji}: '{modified_text}'")
             
             # If replacements were made, edit the message
@@ -2184,8 +1698,8 @@ class TelegramEmojiBot:
                         logger.error(f"Modified text: {modified_text}")
                         return
                     
-                    # Check if the text content actually changed after smart replacement
-                    text_actually_changed = (modified_text != original_text)
+                    # Don't check if parsed text equals original text - we need to proceed with editing
+                    # to apply the premium emoji entities even if the text looks the same
                     
                     # Merge new premium emoji entities with existing formatting entities
                     # This preserves bold, italic, and other formatting while adding premium emojis
@@ -2236,19 +1750,6 @@ class TelegramEmojiBot:
                                 logger.info(f"Message {message.id} has different emoji entities, proceeding with edit")
                                 logger.info(f"Existing: {existing_custom_emojis}")
                                 logger.info(f"New: {new_custom_emojis}")
-                        
-                        # Additional check: if text didn't actually change and we're just adding entities
-                        # this might cause "Content not modified" error
-                        if not text_actually_changed and parsed_text == original_text:
-                            logger.warning(f"Text content unchanged for message {message.id}, but entities differ - this may cause edit failure")
-                            # In this case, we might want to skip the edit to avoid the error
-                            # since the visual result would be the same anyway
-                            if existing_custom_emojis:
-                                should_edit = False
-                                logger.info(f"Skipping edit for message {message.id} to avoid 'Content not modified' error")
-                            else:
-                                # If there are no existing custom emojis, we should proceed
-                                logger.info(f"Proceeding with edit for message {message.id} to add first custom emoji")
                     
                     if should_edit:
                         try:
@@ -5316,6 +4817,7 @@ class TelegramEmojiBot:
                 
                 # Handle private messages with commands FIRST
                 if event.is_private:
+                    # Let handle_private_message do its own validation and authorization
                     await self.handle_private_message(event)
                     return
                 
@@ -5332,34 +4834,43 @@ class TelegramEmojiBot:
                 try:
                     event_peer_id = utils.get_peer_id(event.chat)
                     if event_peer_id and event_peer_id in self.monitored_channels:
-                        # إضافة cache للرسائل المعالجة في النسخ لتجنب التكرار
-                        if not hasattr(self, '_processed_forwarding'):
-                            self._processed_forwarding = set()
-                        
-                        forwarding_key = f"{event_peer_id}_{event.message.id}"
-                        if forwarding_key in self._processed_forwarding:
-                            logger.debug(f"Message {event.message.id} in channel {event_peer_id} already processed for forwarding, skipping")
-                            return
-                        
                         message_text = event.message.text or event.message.message or ""
-                        logger.info(f"Processing new message in monitored channel {event_peer_id}: {message_text}")
-                        
-                        # إضافة الرسالة إلى قائمة المعالجة
-                        self._processed_forwarding.add(forwarding_key)
-                        
-                        # تنظيف الـ cache كل فترة
-                        if len(self._processed_forwarding) > 1000:
-                            recent_forwarding = list(self._processed_forwarding)[-500:]
-                            self._processed_forwarding = set(recent_forwarding)
+                        logger.info(f"Processing message in monitored channel {event_peer_id}: {message_text}")
                         
                         # Handle emoji replacement first (only for original messages in source channels)
                         await self.replace_emojis_in_message(event)
                         
                         # Then handle forwarding (after emoji replacement)
-                        # Get the most recent version of the message after emoji replacement
-                        updated_message = await self.get_updated_message_after_replacement(event)
+                        # Wait a moment to ensure the edit is processed
+                        await asyncio.sleep(0.5)
                         
-                        # Forward the updated message with all formatting preserved
+                        # Get the updated message after emoji replacement
+                        updated_message = event.message
+                        try:
+                            # Try to get the most recent version of the message with retries
+                            for attempt in range(3):
+                                updated_message = await self.client.get_messages(event.chat, ids=event.message.id)
+                                if isinstance(updated_message, list) and len(updated_message) > 0:
+                                    updated_message = updated_message[0]
+                                
+                                # Check if the message has premium emojis (indicating successful replacement)
+                                if updated_message.entities:
+                                    has_premium_emojis = any(
+                                        isinstance(entity, MessageEntityCustomEmoji) 
+                                        for entity in updated_message.entities
+                                    )
+                                    if has_premium_emojis:
+                                        logger.info(f"Successfully retrieved updated message with premium emojis for forwarding")
+                                        break
+                                
+                                if attempt < 2:  # Don't sleep on the last attempt
+                                    await asyncio.sleep(0.5)  # Wait before retry
+                            else:
+                                logger.warning(f"Could not get updated message with premium emojis after 3 attempts")
+                        except Exception as e:
+                            logger.warning(f"Could not fetch updated message, using original: {e}")
+                            updated_message = event.message
+                        
                         await self.forward_message_to_targets(event_peer_id, updated_message)
                         logger.info(f"Finished processing message in channel {event_peer_id}")
                 except Exception as e:
@@ -5396,7 +4907,7 @@ class TelegramEmojiBot:
             try:
                 start_method = getattr(self.client, 'start', None)
                 if start_method and callable(start_method):
-                    await start_method(bot_token=BOT_TOKEN)
+                    await start_method()
             except Exception as e:
                 logger.error(f"Failed to start Telegram client: {e}")
                 raise
@@ -5422,8 +4933,8 @@ class TelegramEmojiBot:
             # Setup event handlers
             self.setup_event_handlers()
             
-            # معالج command_queue معطل في UserBot المستقل
-            # asyncio.create_task(self.start_command_queue_processor())
+            # Start command queue processor
+            asyncio.create_task(self.start_command_queue_processor())
             
             logger.info("Bot is now running and monitoring channels...")
             logger.info("Command queue processor started for Control Bot integration")
@@ -5466,23 +4977,15 @@ async def main():
     """Main function to run the bot"""
     bot = TelegramEmojiBot()
     
-    BOT_TOKEN = os.getenv("BOT_TOKEN")  # تأكد من ضبطه في Northflank Env Vars
-
-async def main():
     try:
-        # Start Telegram bot using bot token to avoid input()
-        await bot.start(bot_token=BOT_TOKEN)
-        logger.info("Bot started successfully")
-        
-        # Run until disconnected
-        await bot.run_until_disconnected()
-        
+        await bot.start()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
         raise
     finally:
         await bot.stop()
-        logger.info("Bot stopped")
 
 if __name__ == "__main__":
     asyncio.run(main())
